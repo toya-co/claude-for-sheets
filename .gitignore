@@ -1,0 +1,35 @@
+# Secrets and certificates — never tracked, from commit one.
+# The stage-2 shipping cert is distributed with release builds, not from here.
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+
+# Daemon local state: credentials, paired-spreadsheet allowlist, activity index
+daemon/config.json
+daemon/credentials.json
+daemon/data/
+daemon/*.db
+daemon/*.sqlite*
+
+# clasp — per-user, contains the developer's own script ID and auth
+.clasp.json
+.clasprc.json
+!.clasp.json.example
+
+# Node
+node_modules/
+dist/
+build/
+out/
+*.log
+npm-debug.log*
+.pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
