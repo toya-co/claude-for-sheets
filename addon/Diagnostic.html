@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font: 12px/1.5 -apple-system, system-ui, sans-serif; padding: 10px; }
+      button { font: inherit; padding: 6px 10px; margin: 2px 0; width: 100%;
+               border: 1px solid #dadce0; border-radius: 6px; background: #fff; cursor: pointer; }
+      pre { background: #f8f9fa; border: 1px solid #dadce0; border-radius: 6px;
+            padding: 8px; font-size: 10px; white-space: pre-wrap; word-break: break-word;
+            max-height: 220px; overflow: auto; margin: 6px 0 12px; }
+      h4 { margin: 12px 0 4px; font-size: 11px; text-transform: uppercase; color: #5f6368; }
+      .ok { color: #1e8e3e; } .bad { color: #d93025; }
+    </style>
+  </head>
+  <body>
+    <h4>1 · transport — ping()</h4>
+    <button id="b1">Run ping</button>
+    <pre id="o1">idle</pre>
+
+    <h4>2 · manifest only</h4>
+    <button id="b2">Run getManifest</button>
+    <pre id="o2">idle</pre>
+
+    <h4>3 · full context</h4>
+    <button id="b3">Run getContext</button>
+    <pre id="o3">idle</pre>
+
+    <script>
+      function run(fnName, outId, arg) {
+        var out = document.getElementById(outId);
+        var settled = false;
+        out.textContent = 'calling ' + fnName + '…';
+
+        var timer = setTimeout(function () {
+          if (!settled) {
+            out.className = 'bad';
+            out.textContent =
+              'NO RESPONSE after 15s.\n' +
+              'Neither handler fired — the request died in transport, not in ' +
+              fnName + '. Almost always an unserializable return value.';
+          }
+        }, 15000);
+
+        var runner = google.script.run
+          .withSuccessHandler(function (res) {
+            settled = true; clearTimeout(timer);
+            out.className = 'ok';
+            try {
+              out.textContent = 'OK\n' + JSON.stringify(res, null, 1).slice(0, 4000);
+            } catch (e) {
+              out.textContent = 'OK but could not stringify locally: ' + e;
+            }
+          })
+          .withFailureHandler(function (err) {
+            settled = true; clearTimeout(timer);
+            out.className = 'bad';
+            out.textContent = 'FAILURE HANDLER\n' + (err && err.message ? err.message : err);
+          });
+
+        if (arg === undefined) runner[fnName]();
+        else runner[fnName](arg);
+      }
+
+      document.getElementById('b1').onclick = function () { run('ping', 'o1'); };
+      document.getElementById('b2').onclick = function () { run('getManifest', 'o2'); };
+      document.getElementById('b3').onclick = function () { run('getContext', 'o3', {}); };
+    </script>
+  </body>
+</html>

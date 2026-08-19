@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      :root { --fg:#202124; --muted:#5f6368; --line:#dadce0; --accent:#1a73e8;
+              --ok:#1e8e3e; --bad:#d93025; --warn-bg:#fef7e0; --warn-fg:#7c5800; }
+      * { box-sizing: border-box; }
+      body { font:13px/1.55 -apple-system, system-ui, "Segoe UI", sans-serif;
+             color:var(--fg); margin:0; height:100vh; display:flex; flex-direction:column; }
+      header { padding:8px 12px; border-bottom:1px solid var(--line);
+               display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+      .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); }
+      .dot.on { background:var(--ok); }
+      .status { font-size:12px; color:var(--muted); flex:1; }
+      .link { font-size:12px; color:var(--accent); cursor:pointer; text-decoration:underline; }
+      main { flex:1 1 auto; overflow-y:auto; padding:12px; }
+      footer { flex:0 0 auto; border-top:1px solid var(--line); padding:10px 12px; }
+
+      .msg { margin-bottom:12px; }
+      .msg.user { color:var(--muted); }
+      .msg.user b { color:var(--fg); }
+      .bubble { white-space:pre-wrap; word-break:break-word; }
+      .op { background:#f8f9fa; border:1px solid var(--line); border-left:3px solid var(--accent);
+            border-radius:4px; padding:6px 8px; margin-top:6px; font-size:12px; }
+      .op.done { border-left-color:var(--ok); }
+      .op.err  { border-left-color:var(--bad); }
+      .op .a1 { font-family:ui-monospace, monospace; }
+      .op button { font:inherit; font-size:11px; padding:2px 8px; margin-top:4px;
+                   border:1px solid var(--line); border-radius:4px; background:#fff; cursor:pointer; }
+      .banner { background:var(--warn-bg); color:var(--warn-fg); padding:8px 10px;
+                border-radius:6px; font-size:12px; margin-bottom:12px; }
+      textarea { width:100%; font:inherit; padding:8px; border:1px solid var(--line);
+                 border-radius:6px; resize:vertical; min-height:52px; }
+      .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
+      .spacer { flex:1 1 auto; }
+      button.send { font:inherit; padding:6px 14px; border-radius:6px; border:1px solid var(--accent);
+                    background:var(--accent); color:#fff; cursor:pointer; }
+      button.send:disabled { opacity:.5; cursor:not-allowed; }
+      .hist { font-size:12px; }
+      .hist .item { padding:6px 0; border-bottom:1px solid var(--line); display:flex; gap:8px; align-items:center; }
+      .hist .a1 { font-family:ui-monospace, monospace; flex:1; }
+      .hist .undone { color:var(--muted); text-decoration:line-through; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="dot" id="dot"></span>
+      <span class="status" id="status">checking local app…</span>
+      <span class="link" id="toggleHist">History</span>
+    </header>
+
+    <main>
+      <div class="banner" id="banner">
+        <b>M3.</b> One <code>setValues</code> per turn, snapshotted and undoable.
+        Multi-step turns and structural edits come later.
+      </div>
+      <div id="log"></div>
+      <div class="hist" id="hist" style="display:none"></div>
+    </main>
+
+    <footer>
+      <textarea id="prompt" placeholder="Ask Claude to change this sheet…"></textarea>
+      <div class="row">
+        <span class="status" id="hint"></span>
+        <span class="spacer"></span>
+        <button class="send" id="send">Send</button>
+      </div>
+    </footer>
+
+    <script>
+      const DAEMON = 'https://localhost:8443';
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) => String(s == null ? '' : s)
+        .replace(/[&<>]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c]));
+
+      let ctx = null;
+
+      function addMsg(cls, html) {
+        const d = document.createElement('div');
+        d.className = 'msg ' + cls;
+        d.innerHTML = html;
+        $('log').appendChild(d);
+        d.scrollIntoView({ block: 'end' });
+        return d;
+      }
+
+      // ---- daemon status ----------------------------------------------------
+      async function checkDaemon() {
+        try {
+          const r = await fetch(DAEMON + '/ping');
+          const j = await r.json();
+          $('dot').classList.add('on');
+          $('status').textContent = j.credentialReady
+            ? 'local app connected'
+            : 'local app up — Claude Code not signed in';
+          return true;
+        } catch {
+          $('dot').classList.remove('on');
+          $('status').innerHTML = 'local app not running';
+          return false;
+        }
+      }
+
+      // ---- extract the op the model proposed --------------------------------
+      function extractOp(text) {
+        const m = text.match(/```sheetop\s*([\s\S]*?)```/);
+        if (!m) return null;
+        try { return JSON.parse(m[1].trim()); } catch { return null; }
+      }
+      function stripOp(text) {
+        return text.replace(/```sheetop[\s\S]*?```/g, '').trim();
+      }
+
+      // ---- apply one op through Apps Script ---------------------------------
+      function applyOp(op, node) {
+        node.className = 'op';
+        node.innerHTML = 'applying <span class="a1">' + esc(op.sheetName || '') +
+                         '!' + esc(op.a1) + '</span>…';
+        google.script.run
+          .withSuccessHandler((res) => {
+            if (!res.ok) {
+              node.className = 'op err';
+              node.innerHTML = '<b>' + esc(res.error.code) + '</b><br>' + esc(res.error.message);
+              return;
+            }
+            node.className = 'op done';
+            node.innerHTML = 'wrote <span class="a1">' + esc(res.applied) + '</span>' +
+              (res.restorable ? '' : ' <i>(too large to undo)</i>');
+            if (res.restorable) {
+              const b = document.createElement('button');
+              b.textContent = 'Undo';
+              b.onclick = () => undo(res.opId, node);
+              node.appendChild(document.createElement('br'));
+              node.appendChild(b);
+            }
+            refreshContext();
+          })
+          .withFailureHandler((err) => {
+            node.className = 'op err';
+            node.textContent = 'Apps Script error: ' + err.message;
+          })
+          .applyOp({
+            type: op.type,
+            sheetName: op.sheetName,
+            a1: op.a1,
+            values: op.values,
+            contextHash: (ctx && ctx.active && op.sheetName === ctx.active.sheetName)
+              ? ctx.active.contextHash : null,
+          });
+      }
+
+      function undo(opId, node) {
+        node.innerHTML = 'undoing…';
+        google.script.run
+          .withSuccessHandler((res) => {
+            node.className = 'op';
+            node.innerHTML = 'restored <span class="a1">' + esc(res.restored) + '</span>';
+            refreshContext();
+          })
+          .withFailureHandler((err) => {
+            node.className = 'op err';
+            node.textContent = 'Undo failed: ' + err.message;
+          })
+          .undoOp(opId);
+      }
+
+      // ---- context ----------------------------------------------------------
+      function refreshContext() {
+        return new Promise((resolve) => {
+          google.script.run
+            .withSuccessHandler((c) => { ctx = c; resolve(c); })
+            .withFailureHandler(() => resolve(null))
+            .getContext({});
+        });
+      }
+
+      // ---- one turn ---------------------------------------------------------
+      async function send() {
+        const text = $('prompt').value.trim();
+        if (!text) return;
+        $('prompt').value = '';
+        $('send').disabled = true;
+        addMsg('user', '<b>You</b><div class="bubble">' + esc(text) + '</div>');
+
+        await refreshContext();
+        const node = addMsg('claude', '<b>Claude</b><div class="bubble"></div>');
+        const bubble = node.querySelector('.bubble');
+        let acc = '';
+
+        try {
+          const res = await fetch(DAEMON + '/turn', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              spreadsheetId: ctx && ctx.spreadsheetId,
+              spreadsheetName: ctx && ctx.spreadsheetName,
+              prompt: text,
+              context: ctx,
+            }),
+          });
+
+          const reader = res.body.getReader();
+          const dec = new TextDecoder();
+          let buf = '';
+
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            const frames = buf.split('\n\n');
+            buf = frames.pop();
+
+            for (const frame of frames) {
+              const line = frame.replace(/^data: /, '').trim();
+              if (!line) continue;
+              let ev;
+              try { ev = JSON.parse(line); } catch { continue; }
+
+              if (ev.type === 'pairing_required') {
+                bubble.innerHTML = '<i>Waiting for approval in the local app — ' +
+                  'open <span class="a1">' + DAEMON + '</span> and allow this spreadsheet.</i>';
+              } else if (ev.type === 'paired') {
+                bubble.innerHTML = '';
+              } else if (ev.type === 'text') {
+                acc += ev.delta;
+                bubble.textContent = stripOp(acc);
+              } else if (ev.type === 'error') {
+                bubble.innerHTML = '<span style="color:var(--bad)"><b>' +
+                  esc(ev.code) + '</b><br>' + esc(ev.message) + '</span>';
+              }
+            }
+          }
+
+          const op = extractOp(acc);
+          if (op) applyOp(op, node.appendChild(document.createElement('div')));
+        } catch (e) {
+          bubble.innerHTML = '<span style="color:var(--bad)">Could not reach the local app. ' +
+            'Is it running? ' + esc(e.message) + '</span>';
+        } finally {
+          $('send').disabled = false;
+        }
+      }
+
+      // ---- history ----------------------------------------------------------
+      function renderHistory(items) {
+        $('hist').innerHTML = items.length
+          ? items.map((h) => `
+              <div class="item">
+                <span class="a1 ${h.undone ? 'undone' : ''}">${esc(h.target)}</span>
+                <span class="status">${esc(h.at.replace('T',' ').slice(5,16))}</span>
+                ${h.restorable && !h.undone
+                  ? `<button onclick="histUndo('${esc(h.opId)}')">Undo</button>` : ''}
+              </div>`).join('')
+          : '<div class="status">No changes yet.</div>';
+      }
+      function histUndo(opId) {
+        google.script.run.withSuccessHandler(() => loadHistory()).undoOp(opId);
+      }
+      function loadHistory() {
+        google.script.run.withSuccessHandler(renderHistory).getHistory();
+      }
+
+      $('toggleHist').onclick = () => {
+        const showing = $('hist').style.display !== 'none';
+        $('hist').style.display = showing ? 'none' : 'block';
+        $('log').style.display = showing ? 'block' : 'none';
+        $('banner').style.display = showing ? 'block' : 'none';
+        if (!showing) loadHistory();
+      };
+
+      $('send').onclick = send;
+      $('prompt').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
+      });
+
+      checkDaemon();
+      refreshContext();
+      setInterval(checkDaemon, 10000);
+    </script>
+  </body>
+</html>

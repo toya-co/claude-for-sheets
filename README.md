@@ -1,67 +1,87 @@
-# Claude Sidebar for Google Sheets
+# Claude for Google Sheets
 
-A Claude chat sidebar inside Google Sheets that reads and edits your spreadsheet,
-with a **clickable, restorable edit history** instead of hoping Ctrl+Z catches it.
+A Claude chat sidebar inside Google Sheets, with a **restorable edit history** —
+click any past change to roll back to it, formats and formulas included.
 
-Runs on **your own Claude subscription** via a local companion app, or on your own
-API key. Nothing is hosted — the model call originates on your machine, and no
-server of ours sits in the middle.
+Two halves, both open source, no server involved:
 
-> **Status: pre-alpha. Nothing is usable yet.**
-> Platform feasibility is proven (see `experiments/`), architecture is designed
-> (see `ARCHITECTURE.md`), and implementation has not started.
+- **`addon/`** — a container-bound Apps Script add-on. Hosts the sidebar and does
+  all sheet I/O. Requests only `spreadsheets.currentonly`, so it can touch the
+  spreadsheet it is installed in and nothing else.
+- **`daemon/`** — a local app you run on your own machine. Holds your Claude
+  credential, serves the sidebar over HTTPS loopback, and is also the dashboard.
+
+Because the model call originates on your machine, it runs on **your own Claude
+subscription** via a local Claude Code install. No API key required, no inference
+billed to anyone else. If you would rather use an API key, BYOK works too.
+
+Nothing is hosted. No Google tokens are stored anywhere, by anyone.
 
 ---
 
-## Why it exists
+## Status
 
-Existing Sheets AI add-ons undo one step, on one tab, restoring values but not
-formatting. That is not a safety net for an agent editing a spreadsheet. This one
-snapshots values, formulas, and formats before every write, models structural
-operations (insert/delete rows, add/remove sheets) with explicit inverses, and
-keeps a history you can scroll back through and restore from — across tabs and
-across sessions.
+**M2 — daemon works.** The sidebar reads real sheet context; the local app pairs,
+invokes Claude, and streams back. They are not wired to each other yet — that is
+M3, and it is the architecture checkpoint.
 
-Agent writes deliberately bypass the native undo stack, so `Ctrl+Z` keeps doing
-exactly what it always did for *your* typing while the agent's changes are
-governed entirely by the restorable history. The two never collide.
+| Milestone | State |
+|---|---|
+| Platform probes (`experiments/`) | ✅ all three passed |
+| M1 add-on skeleton | ✅ verified in a live sheet |
+| M2 daemon: HTTPS loopback, pairing, `claude -p` | ✅ verified by `curl` |
+| M3 first real round-trip edit | next — the architecture checkpoint |
+| M4+ streaming, tool loop, undo, history UI, dashboard | — |
 
-## How it fits together
+Full plan in [`ARCHITECTURE.md`](ARCHITECTURE.md). The platform verification
+behind it is in [`PLAN.md`](PLAN.md).
 
-Two halves in this repo:
+---
 
-- **`addon/`** — a container-bound Apps Script project: the sidebar UI and all
-  sheet I/O. Requests only `spreadsheets.currentonly` and stores no credentials.
-- **`daemon/`** — a local app that holds your Claude credential, serves the
-  sidebar over HTTPS loopback, and is also the dashboard (activity across every
-  spreadsheet it has served, settings, paired-sheet approvals).
-- **`shared/`** — the operation protocol both halves speak. Transport-agnostic on
-  purpose, so the same vocabulary can back an MCP server later.
+## Try M1
 
-Full design in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+You need a Google account and a scratch spreadsheet.
 
-## Platform findings
+1. Open a spreadsheet → **Extensions ▸ Apps Script**.
+2. Copy in `addon/Code.gs`, `addon/Sheet.gs`, and `addon/Sidebar.html` (the HTML
+   file must be named exactly `Sidebar`). Or `clasp push` if you have it set up.
+3. Save, reload the spreadsheet tab.
+4. **Claude ▸ Open sidebar**, authorize, then **Read sheet context**.
 
-Three things this depends on are undocumented by Google. All three were measured
-rather than assumed, and the harnesses are in [`experiments/`](experiments/) so
-you can re-run them:
+You should get the tab manifest, a preview of the active range, and a context
+hash — proving the sidebar↔Apps Script round trip works end to end.
 
-| # | Question | Result |
-|---|---|---|
-| 1 | Can an Apps Script sidebar reach third-party HTTPS origins, and stream? | Yes, including SSE |
-| 2 | Do Apps Script writes enter the native undo stack? | Bound writes do; `openById` writes escape it |
-| 3 | Can the sidebar reach an HTTPS server on `127.0.0.1`? | Yes, including SSE |
+---
 
-Because these are undocumented, they can change without a deprecation notice.
-Re-run the probes before trusting a release.
+## Design notes worth knowing
 
-## Verification record
+**Agent edits do not touch your Ctrl+Z.** Writes go through
+`SpreadsheetApp.openById()` rather than the bound handle, which — measured, not
+assumed — keeps them out of the native undo stack. Your own typing still undoes
+normally; Claude's changes are governed entirely by the in-sheet history. Two
+undo systems that never touch the same edits.
 
-[`PLAN.md`](PLAN.md) is the Phase 0 record — every claim that was checked against
-primary sources, what was confirmed, what could not be, and which planning
-assumptions the results overturned. Kept because the reasoning matters more than
-the conclusions when the platform shifts.
+**History lives in your spreadsheet.** Snapshots go to a hidden
+`__claude_history__` sheet, so they never leave the file, travel with it when
+shared, and restore even with the daemon closed. A safety feature should not have
+a running-process dependency.
+
+**Everything rests on three probes.** The sidebar reaching non-Google origins,
+`openById` escaping native undo, and the sidebar reaching `127.0.0.1` over TLS
+are all **undocumented** Google behaviors that were measured rather than looked
+up. `experiments/` re-runs all three in a few minutes; do that before any release.
+
+---
+
+## Repo layout
+
+```
+addon/       Apps Script add-on — sidebar host and sheet I/O
+daemon/      Local app — credential, loopback API, dashboard (M2)
+shared/      Op protocol — the contract both halves depend on
+experiments/ Platform probes; re-run before releases
+```
 
 ## License
 
-Not yet chosen — see `ARCHITECTURE.md` §11.
+TBD before first release.
