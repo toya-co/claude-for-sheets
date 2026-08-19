@@ -8,8 +8,9 @@
  *   npm run certs   # once
  *   npm start
  *
- * M2 scope: /ping, /turn (streaming), pairing, dashboard. The tool loop that
- * lets Claude actually write to the sheet is M5; M3 wires the first single edit.
+ * Routes: /ping, /turn (streaming), /pair, /unpair, /instructions, /reset, and
+ * the dashboard. One Claude Code session is kept per spreadsheet so a turn can
+ * refer to the last one; the multi-op tool loop is still M5.
  */
 
 const https = require('https');
@@ -175,11 +176,25 @@ async function handleTurn(req, res) {
 
   const started = Date.now();
   fs.mkdirSync(WORKSPACE, { recursive: true });
+
+  // Continue this spreadsheet's conversation. Without it every turn is a fresh
+  // process: "now make it bold" has no referent, and the ~25k CLI baseline is
+  // re-created instead of read from cache.
+  const priorSession = store.getSessionId(spreadsheetId);
   const result = await claude.runTurn(buildPrompt(body), send, {
     cwd: WORKSPACE,
     model: store.getSettings().model,
+    sessionId: priorSession,
+    resume: Boolean(priorSession),
   });
 
+  // Persist whatever session actually opened — which is a new one if the stored
+  // ID had gone missing and runTurn fell back.
+  if (result.sessionId && result.sessionId !== priorSession) {
+    store.setSessionId(spreadsheetId, result.sessionId);
+  }
+
+  const usage = result.usage || {};
   store.recordActivity({
     spreadsheetId,
     spreadsheetName: spreadsheetName || '(unnamed)',
@@ -189,6 +204,11 @@ async function handleTurn(req, res) {
     ok: result.ok,
     costUsd: result.costUsd || 0,
     elapsedMs: Date.now() - started,
+    // The M4.5 signal, kept per turn so the dashboard can show it: on a resumed
+    // session the baseline lands in cacheRead instead of cacheWrite.
+    cacheRead: usage.cache_read_input_tokens || 0,
+    cacheWrite: usage.cache_creation_input_tokens || 0,
+    resumed: Boolean(result.resumed),
   });
 
   res.end();
@@ -232,6 +252,12 @@ const server = https.createServer(loadCerts(), async (req, res) => {
         const { scope, spreadsheetId, text } = await readBody(req);
         if (scope === 'global') store.setGlobalInstructions(text);
         else store.setSheetInstructions(spreadsheetId, text);
+        return json(res, 200, { ok: true });
+      }
+
+      case 'POST /reset': {
+        const { spreadsheetId } = await readBody(req);
+        store.clearSessionId(spreadsheetId);
         return json(res, 200, { ok: true });
       }
 

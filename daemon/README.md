@@ -28,6 +28,7 @@ not slide with use.
 | `GET /status` | Dashboard state: pending, paired, activity, CLI version |
 | `POST /turn` | The turn. SSE stream out; body `{spreadsheetId, spreadsheetName, prompt, context}` |
 | `POST /pair` | `{spreadsheetId, allow}` — settles a pending request |
+| `POST /reset` | `{spreadsheetId}` — ends the conversation, keeps the pairing |
 | `POST /unpair` | `{spreadsheetId}` — revokes |
 
 ### `/turn` event vocabulary
@@ -35,7 +36,7 @@ not slide with use.
 ```
 {type:'pairing_required', spreadsheetName}   waiting on the dashboard
 {type:'paired'}                              approved, proceeding
-{type:'session', model, sessionId}           Claude started
+{type:'session', model, sessionId, resumed}   Claude started
 {type:'text', delta}                         incremental output
 {type:'done', costUsd, usage}                turn complete
 {type:'error', code, message}                AUTH_FAILED · CLI_NOT_FOUND · PAIRING_DENIED · …
@@ -58,8 +59,8 @@ Requests time out unapproved after three minutes.
 This is a spreadsheet editor, not a coding agent, so every invocation strips what
 the CLI would otherwise inherit: `--system-prompt` replaces the coding prompt,
 `--strict-mcp-config` drops MCP servers, `--disallowedTools` removes every local
-tool, `--no-session-persistence` keeps it out of your Claude Code history, and
-cwd is a neutral `~/.claude-sheets/workspace` so no `CLAUDE.md` is discovered.
+tool, and cwd is a neutral `~/.claude-sheets/workspace` so no `CLAUDE.md` is
+discovered.
 
 Claude has **no tools at all** here. It proposes sheet operations; the sidebar
 executes them via Apps Script. So a prompt injection hidden in a cell cannot
@@ -75,10 +76,27 @@ Instructions — global and per-spreadsheet — live in `state.json`, not in Cla
 Code projects or auto-memory. Sheet preferences help; coding-project context does
 not.
 
+## One conversation per spreadsheet
+
+A turn continues the previous turn for the same spreadsheet, so "now make it
+bold" has a referent. The session ID is minted here, stored per spreadsheet in
+`state.json`, and passed as `--session-id` on the first turn and `--resume`
+after. `POST /reset` ends it; the sidebar's **New chat** does that.
+
+Sessions are therefore written to disk, which `--no-session-persistence` used to
+prevent — the two are mutually exclusive, since a conversation that was never
+saved cannot be resumed. They do not land in your coding history: cwd is the
+neutral workspace, so they go to that path's own project bucket
+(`~/.claude/projects/…-claude-sheets-workspace/`).
+
+A stored ID whose session has been deleted is **not** an error the user sees.
+The resume attempt is held silent until the CLI confirms the session opened; if
+it never does, a fresh session starts and the turn proceeds normally.
+
 ## Cost
 
 Every turn pays ~25,000 tokens of CLI baseline, whatever the model. Measured on
-an identical trivial prompt:
+an identical trivial prompt, on a fresh session:
 
 | Model | Cost |
 |---|---|
@@ -88,9 +106,16 @@ an identical trivial prompt:
 Hence the `claude-sonnet-5` default rather than whatever you use for coding.
 Change it in `state.json` → `settings.model`.
 
-`--no-session-persistence` is currently a ~10x multiplier, because each turn
-re-creates that 25k rather than reading it from cache. One resumed session per
-spreadsheet fixes it and adds conversation continuity — that is M4.5.
+Resuming is where the real saving is, because the baseline becomes a cache read
+instead of a cache write. Measured across two turns of one Sonnet 5 session:
+
+| | Cost | `cache_creation` | `cache_read` |
+|---|---|---|---|
+| First turn | $0.0449 | 6,545 | 18,660 |
+| Resumed turn | $0.0081 | 88 | 25,205 |
+
+The longer a conversation runs the more of it is cached, so **New chat** costs
+more than the turn before it. That is the trade for having the context.
 
 ## Two things that are deliberate
 
@@ -124,6 +149,7 @@ src/dashboard.js  dashboard HTML
 
 ## Status
 
-M2 complete. Verified end to end by `curl`: pairing handshake, persistence,
-Claude spawn, stream parsing, and clean error surfacing. M3 wires the sidebar to
-this and performs the first real cell edit.
+M4.5 complete. Verified end to end by `curl`: a second turn answered from the
+first turn's context on a resumed session, `cache_creation` fell 6,545 → 88 and
+cost fell 5.5×, and a deliberately poisoned session ID recovered into a new
+session with nothing surfaced to the caller. M5 is the multi-op tool loop.

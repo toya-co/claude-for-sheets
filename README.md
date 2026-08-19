@@ -21,35 +21,43 @@ Nothing is hosted. No Google tokens are stored anywhere, by anyone.
 
 ## Status
 
-**M2 — daemon works.** The sidebar reads real sheet context; the local app pairs,
-invokes Claude, and streams back. They are not wired to each other yet — that is
-M3, and it is the architecture checkpoint.
+**M4.5 — the round trip works and remembers.** Type an instruction, the local app
+runs it on your Claude subscription, the cell changes, and the change is undoable
+from the sidebar. Turns continue each other, so "now make it bold" knows what
+"it" is.
 
 | Milestone | State |
 |---|---|
 | Platform probes (`experiments/`) | ✅ all three passed |
 | M1 add-on skeleton | ✅ verified in a live sheet |
 | M2 daemon: HTTPS loopback, pairing, `claude -p` | ✅ verified by `curl` |
-| M3 first real round-trip edit | next — the architecture checkpoint |
-| M4+ streaming, tool loop, undo, history UI, dashboard | — |
+| M3 first real round-trip edit | ✅ architecture checkpoint passed |
+| M4 streaming · M6 one-button undo | ✅ landed with M3 |
+| M4.5 one conversation per spreadsheet | ✅ memory, and 5.5× cheaper per turn |
+| M7 restorable history | ◐ lists and undoes any entry; restoring entry 3 of 7 must still invalidate 4–7 |
+| M5 multi-op tool loop + confirmation gate | next |
 
 Full plan in [`ARCHITECTURE.md`](ARCHITECTURE.md). The platform verification
 behind it is in [`PLAN.md`](PLAN.md).
 
 ---
 
-## Try M1
+## Try it
 
-You need a Google account and a scratch spreadsheet.
+You need a Google account, a scratch spreadsheet, and Claude Code installed and
+signed in.
 
-1. Open a spreadsheet → **Extensions ▸ Apps Script**.
-2. Copy in `addon/Code.gs`, `addon/Sheet.gs`, and `addon/Sidebar.html` (the HTML
-   file must be named exactly `Sidebar`). Or `clasp push` if you have it set up.
-3. Save, reload the spreadsheet tab.
-4. **Claude ▸ Open sidebar**, authorize, then **Read sheet context**.
+1. `cd daemon && npm run certs && npm start`, then open
+   **https://localhost:8443/** once and accept the self-signed certificate.
+2. Open a spreadsheet → **Extensions ▸ Apps Script**.
+3. Copy in every file from `addon/` (the HTML files must be named exactly
+   `Sidebar` and `Diagnostic`). Or `clasp push` if you have it set up.
+4. Save, reload the spreadsheet tab, then **Claude ▸ Open sidebar** and authorize.
+5. Ask for a change — "put today's total in B7". The first request for a new
+   spreadsheet waits for you to approve it on the dashboard.
 
-You should get the tab manifest, a preview of the active range, and a context
-hash — proving the sidebar↔Apps Script round trip works end to end.
+Then ask a follow-up that refers back to the first ("now make it bold") to see
+the conversation carry, and **History** to roll the change back.
 
 ---
 
@@ -60,6 +68,12 @@ hash — proving the sidebar↔Apps Script round trip works end to end.
 assumed — keeps them out of the native undo stack. Your own typing still undoes
 normally; Claude's changes are governed entirely by the in-sheet history. Two
 undo systems that never touch the same edits.
+
+**The conversation is per spreadsheet, and endable.** Each sheet gets its own
+Claude Code session, resumed turn to turn, so context carries and the CLI's
+startup cost is read from cache instead of paid again. **New chat** ends it. The
+transcript lives in Claude Code's own store under a neutral workspace path — not
+mixed into your coding history.
 
 **History lives in your spreadsheet.** Snapshots go to a hidden
 `__claude_history__` sheet, so they never leave the file, travel with it when

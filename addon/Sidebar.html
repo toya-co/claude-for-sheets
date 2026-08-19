@@ -47,6 +47,7 @@
     <header>
       <span class="dot" id="dot"></span>
       <span class="status" id="status">checking local app…</span>
+      <span class="link" id="newChat">New chat</span>
       <span class="link" id="toggleHist">History</span>
     </header>
 
@@ -260,6 +261,25 @@
       function loadHistory() {
         google.script.run.withSuccessHandler(renderHistory).getHistory();
       }
+
+      // A turn now continues the previous one, so the conversation needs an end:
+      // otherwise it grows without bound and yesterday's context follows the user
+      // into an unrelated question. Clears the transcript on the daemon side; the
+      // sheet's edit history is separate and untouched.
+      $('newChat').onclick = async () => {
+        if (!ctx || !ctx.spreadsheetId) return;
+        try {
+          await fetch(DAEMON + '/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ spreadsheetId: ctx.spreadsheetId }),
+          });
+          $('log').innerHTML = '';
+          addMsg('user', '<i>New conversation. Claude no longer remembers the turns above.</i>');
+        } catch {
+          addMsg('user', '<i>Could not reach the local app.</i>');
+        }
+      };
 
       $('toggleHist').onclick = () => {
         const showing = $('hist').style.display !== 'none';

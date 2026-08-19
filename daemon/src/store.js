@@ -18,7 +18,7 @@ const FILE = path.join(DIR, 'state.json');
 
 const DEFAULTS = {
   version: 1,
-  paired: {},   // spreadsheetId -> { name, pairedAt, instructions }
+  paired: {},   // spreadsheetId -> { name, pairedAt, instructions, sessionId }
   activity: [], // newest first; capped
   settings: {
     maxActivity: 500,
@@ -82,6 +82,7 @@ function pair(spreadsheetId, name) {
       name: name || '(unnamed)',
       pairedAt: new Date().toISOString(),
       instructions: (s.paired[spreadsheetId] || {}).instructions || '',
+      sessionId: (s.paired[spreadsheetId] || {}).sessionId || null,
     };
   });
 }
@@ -122,6 +123,31 @@ function getInstructions(spreadsheetId) {
   };
 }
 
+/**
+ * The Claude Code session backing this spreadsheet's conversation.
+ *
+ * One session per spreadsheet, not per daemon run: the conversation should
+ * survive closing the app, the same way the edit history does. Only the ID is
+ * kept — the transcript itself is Claude Code's, in the project bucket for the
+ * neutral workspace cwd, and is not read by this process.
+ */
+function getSessionId(spreadsheetId) {
+  return (load().paired[spreadsheetId] || {}).sessionId || null;
+}
+
+function setSessionId(spreadsheetId, sessionId) {
+  return update((s) => {
+    if (!s.paired[spreadsheetId]) return false;
+    s.paired[spreadsheetId].sessionId = sessionId || null;
+    return true;
+  });
+}
+
+/** Start a new conversation for this spreadsheet, keeping it paired. */
+function clearSessionId(spreadsheetId) {
+  return setSessionId(spreadsheetId, null);
+}
+
 function getSettings() {
   return load().settings;
 }
@@ -143,4 +169,5 @@ module.exports = {
   isPaired, pair, unpair, listPaired,
   recordActivity, listActivity,
   getInstructions, setGlobalInstructions, setSheetInstructions, getSettings,
+  getSessionId, setSessionId, clearSessionId,
 };
