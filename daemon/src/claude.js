@@ -98,6 +98,7 @@ function resolveCli_() {
  * streaming uses. Unrecognized chunks are ignored rather than crashing the turn.
  */
 function extractPartialText_(obj) {
+  if (!obj || typeof obj !== 'object') return null;
   const ev = obj.event || obj;
   if (!ev || typeof ev !== 'object') return null;
   if (ev.type === 'content_block_delta' && ev.delta) {
@@ -116,6 +117,118 @@ function extractMessageText_(msg) {
     .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text)
     .join('');
+}
+
+/**
+ * Normalize the CLI's stream-json into our event vocabulary.
+ *
+ * Split out from the spawn so it can be tested against recorded CLI output
+ * without a subprocess, a credential, or a network call. This is the layer most
+ * likely to break on a Claude Code version bump — the shapes it consumes are
+ * observed, not contractual — so `daemon/test/fixtures/` pins real output and
+ * the tests make a shape change loud instead of subtle.
+ *
+ * Emits `{type:'open'}` when the session starts, `{type:'text', delta}` as the
+ * answer streams. Everything else accumulates in `state` for the caller to read
+ * once the process closes. Chunk boundaries are arbitrary — a JSON line can be
+ * split across two reads — so partial lines are held in `buf` until complete.
+ *
+ * @param {(ev: {type: string, [k: string]: any}) => void} emit
+ */
+function createParser_(emit) {
+  let buf = '';
+  const state = {
+    opened: false,      // a system/init line arrived, so the session is live
+    sessionId: null,
+    model: null,
+    streamedText: '',
+    finalText: '',
+    usage: {},
+    costUsd: 0,
+    failed: null,
+  };
+
+  function handle_(obj) {
+    // Hook, status, and summary noise — never surfaced to the sidebar.
+    if (obj.type === 'system') {
+      if (obj.subtype === 'init') {
+        state.opened = true;
+        if (obj.session_id) state.sessionId = obj.session_id;
+        state.model = obj.model || null;
+        emit({ type: 'open', sessionId: state.sessionId, model: state.model });
+      }
+      return;
+    }
+
+    // Token-level streaming, when the CLI provides it.
+    const partial = extractPartialText_(obj);
+    if (partial) {
+      state.streamedText += partial;
+      emit({ type: 'text', delta: partial });
+      return;
+    }
+
+    if (obj.type === 'assistant' && obj.message) {
+      if (obj.error || obj.is_api_error_message) {
+        state.failed = {
+          code: obj.error || 'api_error',
+          message: extractMessageText_(obj.message) || 'Claude returned an error',
+        };
+        return;
+      }
+      const text = extractMessageText_(obj.message);
+      // Only emit whole messages if partial streaming produced nothing —
+      // otherwise the sidebar would render the answer twice.
+      if (text && !state.streamedText) emit({ type: 'text', delta: text });
+      if (text) state.finalText += text;
+      if (obj.message.usage) state.usage = obj.message.usage;
+      return;
+    }
+
+    if (obj.type === 'result') {
+      state.costUsd = obj.total_cost_usd || 0;
+      if (obj.usage) state.usage = obj.usage;
+      if (obj.session_id && !state.sessionId) state.sessionId = obj.session_id;
+      if (obj.is_error) {
+        // On error_during_execution the reason is in `errors`, not `result` —
+        // reading only `result` here reported a useless "Turn failed".
+        const detail = Array.isArray(obj.errors) && obj.errors.length
+          ? String(obj.errors[0])
+          : (typeof obj.result === 'string' ? obj.result : null);
+        state.failed = state.failed ||
+          { code: obj.subtype || obj.terminal_reason || 'error', message: detail || 'Turn failed' };
+      } else if (!state.finalText && typeof obj.result === 'string') {
+        state.finalText = obj.result;
+      }
+    }
+  }
+
+  function line_(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    let obj;
+    try { obj = JSON.parse(trimmed); } catch { return; }  // partial or noise
+    if (!obj || typeof obj !== 'object') return;          // `null`, a bare number
+    handle_(obj);
+  }
+
+  return {
+    state,
+    /** Feed one read from stdout. Safe at any chunk boundary. */
+    feed(text) {
+      buf += text;
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const l of lines) line_(l);
+    },
+    /** Flush whatever the process left without a trailing newline. */
+    end() {
+      const rest = buf;
+      buf = '';
+      line_(rest);
+      return state;
+    },
+  };
 }
 
 /**
@@ -180,113 +293,58 @@ function attempt_(prompt, emit, opts, sessionId, resuming) {
     // cwd is a neutral workspace so no CLAUDE.md is discovered by tree walk.
     const child = spawn(cli, args, { shell: false, cwd: opts.cwd || process.cwd() });
 
-    let buf = '';
-    let streamedText = '';
-    let finalText = '';
-    let usage = {};
-    let costUsd = 0;
-    let failed = null;
-    let opened = false;
-    let liveSessionId = sessionId;
-
-    child.stdout.on('data', (chunk) => {
-      buf += chunk.toString();
-      const lines = buf.split('\n');
-      buf = lines.pop();
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        let obj;
-        try { obj = JSON.parse(trimmed); } catch { continue; }
-
-        // Hook and init noise — never surfaced to the sidebar.
-        if (obj.type === 'system') {
-          if (obj.subtype === 'init') {
-            opened = true;
-            // Trust the CLI's own ID over ours: on resume it echoes the session
-            // it actually opened, and that is the one worth persisting.
-            if (obj.session_id) liveSessionId = obj.session_id;
-            flush();
-            emit({ type: 'session', model: obj.model, sessionId: liveSessionId, resumed: resuming });
-          }
-          continue;
-        }
-
-        // Token-level streaming, when the CLI provides it.
-        const partial = extractPartialText_(obj);
-        if (partial) {
-          streamedText += partial;
-          out({ type: 'text', delta: partial });
-          continue;
-        }
-
-        if (obj.type === 'assistant' && obj.message) {
-          if (obj.error || obj.is_api_error_message) {
-            failed = {
-              code: obj.error || 'api_error',
-              message: extractMessageText_(obj.message) || 'Claude returned an error',
-            };
-            continue;
-          }
-          const text = extractMessageText_(obj.message);
-          // Only emit whole messages if partial streaming produced nothing —
-          // otherwise the sidebar would render the answer twice.
-          if (text && !streamedText) out({ type: 'text', delta: text });
-          if (text) finalText += text;
-          if (obj.message.usage) usage = obj.message.usage;
-          continue;
-        }
-
-        if (obj.type === 'result') {
-          costUsd = obj.total_cost_usd || 0;
-          if (obj.usage) usage = obj.usage;
-          if (obj.is_error) {
-            failed = failed || { code: obj.terminal_reason || 'error', message: obj.result || 'Turn failed' };
-          } else if (!finalText && typeof obj.result === 'string') {
-            finalText = obj.result;
-          }
-        }
-      }
+    // The parser owns shape; this function owns the process and the buffering.
+    // 'open' is the one event that has to escape the hold — it is the proof the
+    // session started, and the caller's cue that a resume succeeded.
+    const parser = createParser_((ev) => {
+      if (ev.type !== 'open') return out(ev);
+      flush();
+      emit({ type: 'session', model: ev.model, sessionId: ev.sessionId || sessionId, resumed: resuming });
     });
+    const st = parser.state;
+
+    child.stdout.on('data', (chunk) => parser.feed(chunk.toString()));
 
     let stderr = '';
     child.stderr.on('data', (d) => { stderr += d.toString(); });
 
     child.on('error', (err) => {
-      if (resuming && !opened) {
-        return resolve({ ok: false, sessionLost: true, sessionId: liveSessionId });
+      if (resuming && !st.opened) {
+        return resolve({ ok: false, sessionLost: true, sessionId });
       }
       flush();
       emit({ type: 'error', code: 'SPAWN_FAILED', message:
         `Could not run "${cli}". (${err.message})` });
-      resolve({ ok: false, text: '', costUsd: 0, usage: {}, sessionId: liveSessionId });
+      resolve({ ok: false, text: '', costUsd: 0, usage: {}, sessionId });
     });
 
     child.on('close', () => {
+      parser.end();
+      const liveSessionId = st.sessionId || sessionId;
+
       // Died before the session opened: the stored ID is gone or unreadable.
       // Report that upward so runTurn can start clean, and emit nothing.
-      if (resuming && !opened) {
+      if (resuming && !st.opened) {
         return resolve({ ok: false, sessionLost: true, sessionId: liveSessionId, stderr });
       }
 
-      if (failed) {
-        const isAuth = /auth/i.test(failed.code) || /authenticate/i.test(failed.message);
+      if (st.failed) {
+        const isAuth = /auth/i.test(st.failed.code) || /authenticate/i.test(st.failed.message);
         flush();
         emit({
           type: 'error',
-          code: isAuth ? 'AUTH_FAILED' : failed.code,
+          code: isAuth ? 'AUTH_FAILED' : st.failed.code,
           message: isAuth
-            ? failed.message + '  —  run `claude` once in a terminal and sign in, then retry.'
-            : failed.message,
+            ? st.failed.message + '  —  run `claude` once in a terminal and sign in, then retry.'
+            : st.failed.message,
         });
-        return resolve({ ok: false, text: '', costUsd, usage, sessionId: liveSessionId });
+        return resolve({ ok: false, text: '', costUsd: st.costUsd, usage: st.usage, sessionId: liveSessionId });
       }
-      const text = streamedText || finalText;
+      const text = st.streamedText || st.finalText;
       flush();
-      emit({ type: 'done', costUsd, usage, sessionId: liveSessionId });
-      resolve({ ok: true, text, costUsd, usage, stderr, sessionId: liveSessionId, resumed: resuming });
+      emit({ type: 'done', costUsd: st.costUsd, usage: st.usage, sessionId: liveSessionId });
+      resolve({ ok: true, text, costUsd: st.costUsd, usage: st.usage, stderr,
+                sessionId: liveSessionId, resumed: resuming });
     });
   });
 }
@@ -329,4 +387,4 @@ function checkCli() {
   });
 }
 
-module.exports = { runTurn, checkCli };
+module.exports = { runTurn, checkCli, createParser_, extractPartialText_, extractMessageText_ };

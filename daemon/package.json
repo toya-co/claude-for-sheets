@@ -2,13 +2,16 @@
   "name": "claude-sheets-daemon",
   "version": "0.2.0",
   "private": true,
-  "description": "Local companion app for the Claude Sheets sidebar — loopback API, credential, dashboard.",
+  "description": "Local companion app for the Claude Sheets sidebar \u2014 loopback API, credential, dashboard.",
   "type": "commonjs",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "certs": "openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 365 -nodes -subj \"//CN=localhost\" -addext \"subjectAltName=DNS:localhost,IP:127.0.0.1\""
+    "certs": "openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 365 -nodes -subj \"//CN=localhost\" -addext \"subjectAltName=DNS:localhost,IP:127.0.0.1\"",
+    "test": "node --test"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {}
 }
