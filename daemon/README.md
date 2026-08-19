@@ -149,7 +149,8 @@ src/dashboard.js  dashboard HTML
 
 ## Status
 
-M4.5 complete. Verified end to end by `curl`: a second turn answered from the
-first turn's context on a resumed session, `cache_creation` fell 6,545 → 88 and
-cost fell 5.5×, and a deliberately poisoned session ID recovered into a new
-session with nothing surfaced to the caller. M5 is the multi-op tool loop.
+M5 complete. The system prompt now teaches four value ops and multi-block
+replies; verified live that a two-part request ("put a header in D1, and make it
+bold") comes back as two separate `sheetop` blocks. Execution, the confirmation
+gate, and undo overlap live in the add-on half and are covered by `npm test`.
+M5.5 adds web search and fetch behind that same gate.

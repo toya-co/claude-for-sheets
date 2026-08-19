@@ -1,0 +1,9 @@
+{
+  "name": "claude-sheets-sidebar",
+  "private": true,
+  "description": "Claude chat sidebar for Google Sheets — Apps Script add-on plus a local companion app.",
+  "scripts": {
+    "test": "node --test daemon/test/*.test.js addon/test/*.test.js"
+  },
+  "engines": { "node": ">=18" }
+}

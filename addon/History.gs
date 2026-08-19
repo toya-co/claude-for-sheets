@@ -79,8 +79,13 @@ function restoreSnapshot_(snap) {
   SpreadsheetApp.flush();
 }
 
-/** Append a history entry; payload chunked across rows of the hidden sheet. */
-function recordHistory_(opId, opType, target, snapshot) {
+/**
+ * Append a history entry; payload chunked across rows of the hidden sheet.
+ *
+ * One entry per op, never per turn. A turn that edits two places is two entries
+ * the user can undo independently — `turnId` only groups them for display.
+ */
+function recordHistory_(opId, opType, target, snapshot, turnId) {
   const json = JSON.stringify(snapshot);
   const restorable = json.length <= MAX_ENTRY_BYTES;
 
@@ -96,9 +101,14 @@ function recordHistory_(opId, opType, target, snapshot) {
   const index = readIndex_();
   index.unshift({           // newest first, per the vault-wide log convention
     opId: opId,
+    turnId: turnId || null,
     at: new Date().toISOString(),
     type: opType,
     target: target,
+    // Kept apart from `target` so overlap can be computed without re-parsing a
+    // display string. See laterOverlaps_().
+    sheetName: snapshot.sheetName,
+    a1: snapshot.a1,
     bytes: json.length,
     restorable: restorable,
     undone: false,
@@ -125,12 +135,72 @@ function getHistory() {
   return readIndex_().slice(0, 50);
 }
 
-/** Undo one entry by rewriting its snapshot. */
-function undoOp(opId) {
+/** Do two A1 ranges on the same sheet share a cell? Pure rectangle overlap. */
+function rangesOverlap_(sheet, a1A, a1B) {
+  const A = sheet.getRange(a1A);
+  const B = sheet.getRange(a1B);
+  const aTop = A.getRow(), aLeft = A.getColumn();
+  const aBottom = aTop + A.getNumRows() - 1, aRight = aLeft + A.getNumColumns() - 1;
+  const bTop = B.getRow(), bLeft = B.getColumn();
+  const bBottom = bTop + B.getNumRows() - 1, bRight = bLeft + B.getNumColumns() - 1;
+  return aTop <= bBottom && bTop <= aBottom && aLeft <= bRight && bLeft <= aRight;
+}
+
+/**
+ * Entries newer than this one that touched the same cells.
+ *
+ * This is what makes per-op undo safe. Restoring an entry rewrites its whole
+ * range from a snapshot taken *before* it ran, so if a later edit touched any of
+ * those cells, undoing the earlier one silently reverts the later one too — with
+ * the later entry still listed as applied. Disjoint edits, which is the normal
+ * case, are unaffected.
+ *
+ * The index is newest-first, so "newer" is everything before this entry's slot.
+ */
+function laterOverlaps_(index, entry) {
+  if (!entry.a1 || !entry.sheetName) return [];   // pre-M5 entry, no range recorded
+  const sheet = writeSpreadsheet_().getSheetByName(entry.sheetName);
+  if (!sheet) return [];
+
+  const slot = index.findIndex((e) => e.opId === entry.opId);
+  const blockers = [];
+  for (let i = 0; i < slot; i++) {
+    const other = index[i];
+    if (other.undone || !other.a1 || other.sheetName !== entry.sheetName) continue;
+    try {
+      if (rangesOverlap_(sheet, entry.a1, other.a1)) blockers.push(other);
+    } catch (e) { /* an unparseable stored range should not block an undo */ }
+  }
+  return blockers;
+}
+
+/**
+ * Undo one entry by rewriting its snapshot.
+ *
+ * Refuses when a later change overlaps, rather than silently eating it. `force`
+ * is the user's override, offered once they have been told what it costs.
+ */
+function undoOp(opId, force) {
   const index = readIndex_();
   const entry = index.find((e) => e.opId === opId);
   if (!entry) throw new Error('No history entry: ' + opId);
   if (!entry.restorable) throw new Error('That change was too large to be restorable.');
+  if (entry.undone) throw new Error('That change has already been undone.');
+
+  if (!force) {
+    const blockers = laterOverlaps_(index, entry);
+    if (blockers.length) {
+      return {
+        ok: false,
+        code: 'BLOCKED_BY_LATER_EDIT',
+        opId: opId,
+        blockers: blockers.map((b) => ({ opId: b.opId, type: b.type, target: b.target })),
+        message: blockers.length === 1
+          ? 'A later change to ' + blockers[0].target + ' overlaps this one. Undoing this would revert that too.'
+          : blockers.length + ' later changes overlap this one. Undoing this would revert them too.',
+      };
+    }
+  }
 
   const snap = loadSnapshot_(opId);
   if (!snap) throw new Error('Snapshot missing — the history sheet may have been deleted.');

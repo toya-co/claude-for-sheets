@@ -21,10 +21,10 @@ Nothing is hosted. No Google tokens are stored anywhere, by anyone.
 
 ## Status
 
-**M4.5 — the round trip works and remembers.** Type an instruction, the local app
-runs it on your Claude subscription, the cell changes, and the change is undoable
-from the sidebar. Turns continue each other, so "now make it bold" knows what
-"it" is.
+**M5 — a turn can make several changes, and you can undo any one of them.** Type
+an instruction, the local app runs it on your Claude subscription, and the sheet
+changes. Turns continue each other, so "now make it bold" knows what "it" is.
+Anything that would overwrite your data asks first.
 
 | Milestone | State |
 |---|---|
@@ -34,8 +34,9 @@ from the sidebar. Turns continue each other, so "now make it bold" knows what
 | M3 first real round-trip edit | ✅ architecture checkpoint passed |
 | M4 streaming · M6 one-button undo | ✅ landed with M3 |
 | M4.5 one conversation per spreadsheet | ✅ memory, and 5.5× cheaper per turn |
-| M7 restorable history | ◐ lists and undoes any entry; restoring entry 3 of 7 must still invalidate 4–7 |
-| M5 multi-op tool loop + confirmation gate | next |
+| M5 multi-op turns + confirmation gate | ✅ four value ops, per-op undo, stale-context guard |
+| M7 restorable history | ✅ undo any entry; blocked when a later edit overlaps |
+| M5.5 web search and fetch, behind the gate | next |
 
 Full plan in [`ARCHITECTURE.md`](ARCHITECTURE.md). The platform verification
 behind it is in [`PLAN.md`](PLAN.md).
@@ -57,11 +58,23 @@ signed in.
    spreadsheet waits for you to approve it on the dashboard.
 
 Then ask a follow-up that refers back to the first ("now make it bold") to see
-the conversation carry, and **History** to roll the change back.
+the conversation carry, and **History** to roll any single change back.
+
+Run the tests with `npm test` from the repo root. No browser, no Google account,
+no Claude invocation — the add-on half runs against a fake `SpreadsheetApp` and
+the daemon half against recorded CLI output.
 
 ---
 
 ## Design notes worth knowing
+
+**Nothing destructive happens without a question.** Overwriting a formula asks
+every time, even for one cell — replacing a formula with its own current value
+looks like nothing changed and quietly kills what computed it. Overwriting more
+than ten cells that already hold something asks. Clearing anything asks. Writing
+into empty cells does not, because that is not a risk. The check runs in Apps
+Script rather than the sidebar, so a prompt injection hidden in a cell cannot
+talk its way past it.
 
 **Agent edits do not touch your Ctrl+Z.** Writes go through
 `SpreadsheetApp.openById()` rather than the bound handle, which — measured, not
@@ -90,8 +103,10 @@ up. `experiments/` re-runs all three in a few minutes; do that before any releas
 ## Repo layout
 
 ```
-addon/       Apps Script add-on — sidebar host and sheet I/O
-daemon/      Local app — credential, loopback API, dashboard (M2)
+addon/       Apps Script add-on — sidebar host, sheet I/O, undo history
+addon/test/  Runs the .gs files against a fake SpreadsheetApp
+daemon/      Local app — credential, loopback API, dashboard
+daemon/test/ stream-json fixtures from the real CLI
 shared/      Op protocol — the contract both halves depend on
 experiments/ Platform probes; re-run before releases
 ```
