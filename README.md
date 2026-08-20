@@ -6,8 +6,9 @@ click any past change to roll back to it, formats and formulas included.
 Two halves, both open source, no server involved:
 
 - **`addon/`** — a container-bound Apps Script add-on. Hosts the sidebar and does
-  all sheet I/O. Requests only `spreadsheets.currentonly`, so it can touch the
-  spreadsheet it is installed in and nothing else.
+  all sheet I/O. Requests `spreadsheets.currentonly` — so it can touch the
+  spreadsheet it is installed in and nothing else — plus `script.container.ui`,
+  which only permits drawing the sidebar and grants no data access.
 - **`daemon/`** — a local app you run on your own machine. Holds your Claude
   credential, serves the sidebar over HTTPS loopback, and is also the dashboard.
 

@@ -1,0 +1,21 @@
+# What clasp must NOT upload to the Apps Script project.
+#
+# clasp push sends everything under rootDir by default. The test suite is Node
+# code — require(), module.exports, a fake SpreadsheetApp — and Apps Script would
+# either fail to load it or, worse, pull its helper names into the same global
+# namespace the real files share. Either way the add-on breaks, and the symptom
+# is a project that stops running with no obvious cause.
+#
+# Paths are relative to rootDir (addon/). Negation is not supported reliably —
+# list what to exclude, not what to keep.
+
+test/**
+**/*.test.js
+
+# Local-only config: .clasp.json holds your own script ID.
+.clasp.json
+.clasp.json.example
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
