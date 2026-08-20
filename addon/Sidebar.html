@@ -496,8 +496,14 @@
       };
 
       $('send').onclick = send;
+      // Enter sends; Shift+Enter makes a newline. Chat convention, and the
+      // textarea would otherwise insert a line break before send() ever ran.
       $('prompt').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
+        if (e.key !== 'Enter' || e.shiftKey) return;
+        // Mid-composition Enter commits an IME candidate — never a send.
+        if (e.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        send();
       });
 
       checkDaemon();

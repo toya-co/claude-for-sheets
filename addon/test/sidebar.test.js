@@ -170,6 +170,18 @@ test('a turn in flight can be aborted', () => {
     'the composer is re-enabled in a finally, whatever happened');
 });
 
+test('Enter sends and Shift+Enter makes a newline', () => {
+  const handler = code.slice(code.indexOf("$('prompt').addEventListener"));
+  const fn = handler.slice(0, handler.indexOf('});') + 3);
+
+  assert.ok(/e\.key !== 'Enter' \|\| e\.shiftKey/.test(fn), 'Shift+Enter falls through to the textarea');
+  assert.ok(fn.includes('e.preventDefault()'),
+    'the newline is suppressed, or the textarea grows before send() runs');
+  assert.ok(fn.indexOf('e.preventDefault()') < fn.indexOf('send()'),
+    'suppress first, then send');
+  assert.ok(/isComposing/.test(fn), 'Enter during IME composition commits a candidate, not a message');
+});
+
 test('the sidebar never hardcodes a sheet or spreadsheet id', () => {
   // Everything is scoped to the container the add-on is installed in.
   assert.ok(!/openById\(['"][A-Za-z0-9_-]{20,}/.test(raw));
