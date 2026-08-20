@@ -16,6 +16,22 @@
 /** Above this many existing non-empty cells overwritten, ask first. */
 const DESTRUCTIVE_CELL_THRESHOLD = 10;
 
+/** Where onEdit (Code.gs) leaves its "a person typed" marker. */
+const EDIT_MARK_KEY = 'claude.humanEdit';
+
+/**
+ * The last human edit, or null. Millisecond timestamps, compared against the
+ * watermark a turn captured when it read the sheet.
+ */
+function editWatermark_() {
+  try {
+    const raw = PropertiesService.getDocumentProperties().getProperty(EDIT_MARK_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 const VALUE_OPS = ['setValues', 'setFormulas', 'setFormats', 'clear'];
 const STRUCTURAL_OPS = ['insertRows', 'deleteRows', 'insertColumns', 'deleteColumns', 'addSheet', 'deleteSheet'];
 
@@ -248,7 +264,24 @@ function inspectOps(ops) {
  * which can only match by luck.
  */
 function checkGuard_(ss, guard) {
-  if (!guard || !guard.hash || !guard.a1) return null;
+  if (!guard) return null;
+
+  // Secondary: did a person type anywhere in the file since this turn read it?
+  // Catches edits outside the range that was read, which the hash cannot see.
+  if (guard.since) {
+    const mark = editWatermark_();
+    if (mark && mark.at > guard.since) {
+      const where = mark.sheetName && mark.a1 ? ' (' + mark.sheetName + '!' + mark.a1 + ')' : '';
+      return {
+        code: 'CONTEXT_STALE',
+        message: 'Someone edited the spreadsheet' + where + ' after this was planned. ' +
+                 'Nothing was changed. Read the sheet again before writing.',
+      };
+    }
+  }
+
+  // Primary: is the region this was planned against byte-for-byte unchanged?
+  if (!guard.hash || !guard.a1) return null;
   const sheet = guard.sheetName ? ss.getSheetByName(guard.sheetName) : ss.getSheets()[0];
   if (!sheet) {
     return { code: 'SHEET_NOT_FOUND', message: 'No sheet named ' + guard.sheetName };
@@ -257,10 +290,34 @@ function checkGuard_(ss, guard) {
   if (current !== guard.hash) {
     return {
       code: 'CONTEXT_STALE',
-      message: 'The sheet changed since this was planned. Re-read the sheet and try again.',
+      message: 'The contents of ' + sheet.getName() + '!' + guard.a1 + ' changed after this ' +
+               'was planned. Nothing was changed. Read the sheet again before writing.',
     };
   }
   return null;
+}
+
+/**
+ * The guard, refreshed to reflect this turn's own work.
+ *
+ * Without this a multi-write turn defeats itself: op 1 changes the guarded
+ * region, so op 2's hash check fails on a change *we* made. Re-hashing after
+ * each turn keeps the guard sensitive to everyone except us.
+ */
+function refreshedGuard_(ss, guard) {
+  if (!guard || !guard.a1) return null;
+  const sheet = guard.sheetName ? ss.getSheetByName(guard.sheetName) : ss.getSheets()[0];
+  if (!sheet) return null;
+  try {
+    return {
+      sheetName: sheet.getName(),
+      a1: guard.a1,
+      hash: hashValues_(sanitizeGrid_(sheet.getRange(guard.a1).getValues())),
+      since: guard.since || null,
+    };
+  } catch (e) {
+    return null;   // the region stopped existing (a structural op); drop the guard
+  }
 }
 
 function newOpId_() {
@@ -447,5 +504,8 @@ function applyOps(request) {
     ok: results.every(function (r) { return r.ok; }),
     turnId: turnId,
     results: results,
+    // Hand the caller a guard that accounts for what we just did, so the next
+    // write in this turn is not rejected because of our own edit.
+    guard: refreshedGuard_(ss, request.guard),
   };
 }

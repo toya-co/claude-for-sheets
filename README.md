@@ -39,7 +39,8 @@ own undo entry, and anything destructive asks first.
 | M5.7 live tool loop (read, write, continue) | ✅ verified end to end |
 | M7 restorable history | ✅ undo any entry; blocked when a later edit overlaps |
 | M8 rows, columns, and tabs — with undo | ✅ deletes snapshot first; sheet deletes always ask |
-| M9 mid-turn edit detection | next |
+| M9 mid-turn edit detection | ✅ your typing aborts Claude's write, never the reverse |
+| M5.5 web search and fetch, behind the gate | next |
 
 Full plan in [`ARCHITECTURE.md`](ARCHITECTURE.md). The platform verification
 behind it is in [`PLAN.md`](PLAN.md).
@@ -70,6 +71,13 @@ the daemon half against recorded CLI output.
 ---
 
 ## Design notes worth knowing
+
+**If you type while Claude is working, you win.** Every write carries a
+fingerprint of the data Claude read. Apps Script re-checks it in the same
+instant it writes, so an edit you made in between aborts the write rather than
+being silently overwritten — the whole turn stops before anything changes,
+Claude re-reads, and continues against what is actually there. A second signal
+catches edits outside the range it was looking at.
 
 **Nothing destructive happens without a question.** Overwriting a formula asks
 every time, even for one cell — replacing a formula with its own current value

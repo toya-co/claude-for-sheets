@@ -161,8 +161,8 @@ src/dashboard.js  dashboard HTML
 
 ## Status
 
-M8 complete. Eleven tools: read, four value ops, and six structural ops (rows,
-columns, tabs) with inverse-op undo. Verified live through the loop: "delete the
-Gadget row" produced read_range, the correct delete_rows index derived from what
-it read, and add_sheet — one conversation. M9 (mid-turn edit detection) and M5.5
-(web search/fetch behind the gate) are next.
+M9 complete. Eleven tools, and every write is now guarded against a human
+editing mid-turn: the turn aborts before any op runs, Claude is told to re-read,
+and it recovers on its own. Verified live — a simulated edit between read and
+write refused both writes, and the re-read retry completed correctly. M5.5 (web
+search/fetch behind the gate) is next.

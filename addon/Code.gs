@@ -32,6 +32,32 @@ function showDiagnostic() {
 }
 
 /**
+ * Records that a *person* touched the sheet.
+ *
+ * A simple trigger fires for human edits and never for programmatic ones, which
+ * makes it the one unambiguous signal we have: if this timestamp moves during a
+ * turn, someone typed. Our own writes go through `openById` and never land here.
+ *
+ * This is the secondary check — it catches an edit anywhere in the file, where
+ * the range hash only covers what Claude actually read. Wrapped in try/catch
+ * because a simple trigger runs unauthorized and must never break the user's
+ * ability to type in their own spreadsheet.
+ */
+function onEdit(e) {
+  try {
+    const range = e && e.range;
+    PropertiesService.getDocumentProperties().setProperty(EDIT_MARK_KEY, JSON.stringify({
+      at: Date.now(),
+      sheetName: range ? range.getSheet().getName() : null,
+      a1: range ? range.getA1Notation() : null,
+    }));
+  } catch (err) {
+    // Nothing to do and nothing worth failing over. The range hash still covers
+    // the region Claude read, which is the common case.
+  }
+}
+
+/**
  * Transport check. Returns a primitive and touches nothing — if this does not
  * round trip, the problem is google.script.run itself, not any payload.
  */
@@ -70,6 +96,9 @@ function getContext(opts) {
     spreadsheetName: readSpreadsheet_().getName(),
     sheets: sheetManifest_(),
     active: readRange_(opts.sheetName, opts.a1),
+    // Carried back on every write this turn, so a human edit made after this
+    // read is detected even if it lands outside the range above.
+    editWatermark: editWatermark_(),
   };
 
   context.elapsedMs = Date.now() - started;

@@ -186,17 +186,26 @@ it.
 Every write is a compare-and-swap built by hand, because Sheets v4 offers no
 ETag, no `If-Match`, and `LockService` does not cover a human typing in the UI.
 
-1. `getContext` returns `contextHash` for the region the agent may touch.
-2. The op carries that hash back.
+1. `getContext` returns `contextHash` for the region read, plus `editWatermark`.
+2. Every write in the turn carries both back as `guard: {sheetName, a1, hash, since}`.
 3. Immediately before applying — **inside the same execution**, so nothing can
    interleave — Apps Script re-hashes and compares.
-4. Mismatch → abort with `CONTEXT_STALE`. The sidebar re-reads context and
-   re-plans rather than retrying blind.
+4. Mismatch → abort the **whole turn** with `CONTEXT_STALE` before any op runs.
+   The tool result tells Claude to re-read, which it does, and the retry
+   succeeds against current data.
 
-`onEdit` is a secondary signal only. It fires for human edits and never for our
-own writes, which makes a timestamp newer than the context read positive evidence
-that a person touched the sheet mid-turn. It queues at most two events, so treat
-it as a hint, never a ledger.
+**The guard must be blind to our own writes.** A turn that writes twice would
+otherwise reject its own second op, having changed the guarded region itself. So
+`applyOps` returns a `guard` refreshed to the post-write state, and the caller
+carries that forward. It stays sensitive to everyone except the current turn.
+
+`onEdit` is the secondary signal, and it closes the gap the hash cannot see: an
+edit *outside* the region that was read. It fires for human edits and never for
+our own writes — those go through `openById` — so a marker newer than `since` is
+positive evidence a person typed. It queues at most two events, so treat it as a
+hint, never a ledger; a corrupt or missing marker is ignored rather than blocking
+every write. The simple trigger runs unauthorized and is wrapped in `try/catch`,
+because nothing here may ever break a user's ability to type in their own file.
 
 ---
 
@@ -237,6 +246,9 @@ Implemented: `getContext`, `inspectOps`, `applyOps`, `undoOp`, `getHistory`, and
 `applyOp` as a one-op convenience over `applyOps`. All four value ops and all
 six structural ops work, with the gate, the guard, and inverse-op undo. The
 hidden history sheet is protected from every op type (`PROTECTED_SHEET`).
+
+Mid-turn conflict detection is live: range hash plus the `onEdit` watermark,
+carried on every write and refreshed after each.
 
 Not implemented: `RANGE_TOO_LARGE` is not yet raised — an oversized range is
 capped at read time instead.

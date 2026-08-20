@@ -106,170 +106,6 @@
         }
       }
 
-      // ---- extract the ops the model proposed -------------------------------
-      // A turn can carry several. Accept either several blocks or one block
-      // holding an array — the model reaches for both, and rejecting one of them
-      // costs a round trip to say so.
-      function extractOps(text) {
-        const ops = [];
-        const re = /```sheetop\s*([\s\S]*?)```/g;
-        let m;
-        while ((m = re.exec(text)) !== null) {
-          let parsed;
-          try { parsed = JSON.parse(m[1].trim()); } catch { continue; }
-          const list = Array.isArray(parsed) ? parsed
-                     : Array.isArray(parsed && parsed.ops) ? parsed.ops
-                     : [parsed];
-          for (const op of list) if (op && op.type) ops.push(op);
-        }
-        // Client-generated, per shared/protocol.md — the sidebar has to be able
-        // to name a specific op when confirming it.
-        return ops.map((op, i) => Object.assign({}, op, {
-          opId: 'op_' + Date.now() + '_' + i + '_' + Math.floor(Math.random() * 1e6),
-        }));
-      }
-      // Removing a block leaves the blank lines that surrounded it, which renders
-      // as a large empty gap under `white-space: pre-wrap` — it reads as a broken
-      // message. Collapse the hole rather than just deleting the block.
-      function stripOps(text) {
-        return text
-          .replace(/```sheetop[\s\S]*?```/g, '\u0000')
-          .replace(/\s*\u0000\s*/g, '\n\n')
-          .replace(/\n{3,}/g, '\n\n')
-          .trim();
-      }
-
-      // ---- apply a turn's ops through Apps Script ---------------------------
-      //
-      // Apps Script applies in order and stops at the first op that either fails
-      // or needs confirming, so this walks the list: render what happened, and if
-      // it stopped to ask, resume from that point once the user answers.
-      //
-      // The gate is enforced on the Apps Script side, not here. This code only
-      // renders the question; approving re-submits and Apps Script re-checks.
-
-      // The region the ops were planned against. Apps Script re-hashes it before
-      // touching anything, so an edit made mid-turn aborts rather than clobbers.
-      function planGuard() {
-        if (!ctx || !ctx.active) return null;
-        return {
-          sheetName: ctx.active.sheetName,
-          a1: ctx.active.a1,
-          hash: ctx.active.contextHash,
-        };
-      }
-
-      function runOps(ops, from, confirmed, container) {
-        const pending = ops.slice(from);
-        if (!pending.length) { refreshContext(); return; }
-
-        const node = container.appendChild(document.createElement('div'));
-        node.className = 'op';
-        node.textContent = 'applying…';
-
-        google.script.run
-          .withSuccessHandler((res) => {
-            node.remove();
-            if (res && res.error && !res.results) {
-              const e = container.appendChild(document.createElement('div'));
-              e.className = 'op err';
-              e.innerHTML = '<b>' + esc(res.error.code) + '</b><br>' + esc(res.error.message);
-              return;
-            }
-            const results = (res && res.results) || [];
-            results.forEach((r, i) => renderResult(r, ops, from + i, container));
-            refreshContext();
-          })
-          .withFailureHandler((err) => {
-            node.className = 'op err';
-            node.textContent = 'Apps Script error: ' + err.message;
-          })
-          .applyOps({ ops: pending, guard: planGuard(), confirmed: confirmed || [] });
-      }
-
-      function renderResult(r, ops, index, container) {
-        const node = container.appendChild(document.createElement('div'));
-
-        if (r.needsConfirmation) {
-          node.className = 'op ask';
-          node.innerHTML = 'This would <b>' + esc(r.reason) + '</b> in ' +
-            '<span class="a1">' + esc(r.target) + '</span>.' +
-            '<div class="why">It can still be undone afterwards.</div>';
-          const yes = document.createElement('button');
-          yes.textContent = 'Do it';
-          yes.onclick = () => { node.remove(); runOps(ops, index, [ops[index].opId], container); };
-          const no = document.createElement('button');
-          no.textContent = 'Skip';
-          no.style.marginLeft = '6px';
-          no.onclick = () => {
-            node.className = 'op';
-            node.innerHTML = 'skipped <span class="a1">' + esc(r.target) + '</span>';
-            runOps(ops, index + 1, [], container);
-          };
-          node.appendChild(document.createElement('br'));
-          node.appendChild(yes);
-          node.appendChild(no);
-          return;
-        }
-
-        if (!r.ok) {
-          node.className = 'op err';
-          node.innerHTML = '<b>' + esc(r.error.code) + '</b><br>' + esc(r.error.message);
-          return;
-        }
-
-        node.className = 'op done';
-        node.innerHTML = esc(verb(r.type)) + ' <span class="a1">' + esc(r.applied) + '</span>' +
-          (r.restorable ? '' : ' <i>(too large to undo)</i>');
-        if (r.restorable) {
-          const b = document.createElement('button');
-          b.textContent = 'Undo';
-          b.onclick = () => undo(r.opId, node);
-          node.appendChild(document.createElement('br'));
-          node.appendChild(b);
-        }
-      }
-
-      function verb(type) {
-        return type === 'clear' ? 'cleared'
-             : type === 'setFormats' ? 'formatted'
-             : type === 'setFormulas' ? 'set formulas in'
-             : type === 'insertRows' || type === 'insertColumns' ? 'inserted'
-             : type === 'deleteRows' || type === 'deleteColumns' ? 'deleted'
-             : type === 'addSheet' ? 'added'
-             : type === 'deleteSheet' ? 'deleted'
-             : 'wrote';
-      }
-
-      // Undo can refuse: restoring a range that a later change also touched would
-      // revert that later change too, without saying so. Offer the override
-      // rather than either hiding the option or silently taking the risk.
-      function undo(opId, node, force) {
-        const previous = node.innerHTML;
-        node.innerHTML = 'undoing…';
-        google.script.run
-          .withSuccessHandler((res) => {
-            if (res && res.ok === false && res.code === 'BLOCKED_BY_LATER_EDIT') {
-              node.className = 'op ask';
-              node.innerHTML = esc(res.message);
-              const anyway = document.createElement('button');
-              anyway.textContent = 'Undo anyway';
-              anyway.onclick = () => { node.innerHTML = previous; undo(opId, node, true); };
-              node.appendChild(document.createElement('br'));
-              node.appendChild(anyway);
-              return;
-            }
-            node.className = 'op';
-            node.innerHTML = 'restored <span class="a1">' + esc(res.restored) + '</span>';
-            refreshContext();
-          })
-          .withFailureHandler((err) => {
-            node.className = 'op err';
-            node.textContent = 'Undo failed: ' + err.message;
-          })
-          .undoOp(opId, Boolean(force));
-      }
-
       // ---- the tool loop ----------------------------------------------------
       //
       // Claude's tool calls arrive over the turn's SSE stream as
@@ -285,6 +121,26 @@
       // show while it runs. Structural tools address rows/columns/tabs rather
       // than an a1 range, hence builders instead of a fixed field mapping.
       const span = (a) => a.count > 1 ? a.index + '-' + (a.index + a.count - 1) : a.index;
+      // What Claude last read, and when — the basis of every write's guard.
+      //
+      // Apps Script re-hashes this region inside the same execution as the
+      // write, so a human typing between Claude's read and its write aborts the
+      // write instead of being silently overwritten. `since` additionally
+      // catches edits outside the region, via the onEdit marker.
+      //
+      // Refreshed from every applyOps response, because our own writes change
+      // the region too and must not trip the check.
+      let guardState = null;
+
+      function rememberRead(c) {
+        guardState = {
+          sheetName: c.active.sheetName,
+          a1: c.active.a1,
+          hash: c.active.contextHash,
+          since: c.editWatermark ? c.editWatermark.at : Date.now(),
+        };
+      }
+
       const TOOL_OPS = {
         set_values:     (a) => ({ op: { type: 'setValues', sheetName: a.sheetName, a1: a.a1, values: a.values },
                                   verb: 'writing', where: a.sheetName + '!' + a.a1 }),
@@ -327,6 +183,7 @@
           google.script.run
             .withSuccessHandler((c) => {
               ctx = c;   // a read refreshes our own picture of the sheet too
+              rememberRead(c);
               node.className = 'op done';
               node.innerHTML = 'read <span class="a1">' +
                 esc(c.active.sheetName + '!' + c.active.a1) + '</span>' +
@@ -365,7 +222,23 @@
       function submitToolOp(callId, op, node, confirmed) {
         google.script.run
           .withSuccessHandler((res) => {
+            // Accounts for the write we just made, so the next op in this turn
+            // is not rejected for our own edit.
+            if (res.guard) guardState = res.guard;
+
             const r = (res.results && res.results[0]) || res;
+
+            // The guard fired: a person edited mid-turn and nothing was
+            // written. Tell Claude to re-read rather than letting it retry
+            // blind against a sheet it no longer understands.
+            if (res.error && res.error.code === 'CONTEXT_STALE') {
+              node.className = 'op ask';
+              node.innerHTML = '<b>Paused — the sheet changed.</b><div class="why">' +
+                esc(res.error.message) + '</div>';
+              guardState = null;   // forced to read again before the next write
+              postOpResult(callId, { error: 'CONTEXT_STALE: ' + res.error.message });
+              return;
+            }
 
             if (r.needsConfirmation) {
               node.className = 'op ask';
@@ -420,14 +293,14 @@
             node.textContent = 'Apps Script error: ' + err.message;
             postOpResult(callId, { error: String(err.message || err) });
           })
-          .applyOps({ ops: [op], confirmed: confirmed });
+          .applyOps({ ops: [op], confirmed: confirmed, guard: guardState });
       }
 
       // ---- context ----------------------------------------------------------
       function refreshContext() {
         return new Promise((resolve) => {
           google.script.run
-            .withSuccessHandler((c) => { ctx = c; resolve(c); })
+            .withSuccessHandler((c) => { ctx = c; rememberRead(c); resolve(c); })
             .withFailureHandler(() => resolve(null))
             .getContext({});
         });
@@ -484,7 +357,7 @@
                 handleToolCall(ev, node);
               } else if (ev.type === 'text') {
                 acc += ev.delta;
-                bubble.textContent = stripOps(acc);
+                bubble.textContent = acc;
               } else if (ev.type === 'error') {
                 bubble.innerHTML = '<span style="color:var(--bad)"><b>' +
                   esc(ev.code) + '</b><br>' + esc(ev.message) + '</span>';
@@ -492,8 +365,6 @@
             }
           }
 
-          const ops = extractOps(acc);
-          if (ops.length) runOps(ops, 0, [], node);
         } catch (e) {
           bubble.innerHTML = '<span style="color:var(--bad)">Could not reach the local app. ' +
             'Is it running? ' + esc(e.message) + '</span>';
