@@ -17,6 +17,7 @@
 const DESTRUCTIVE_CELL_THRESHOLD = 10;
 
 const VALUE_OPS = ['setValues', 'setFormulas', 'setFormats', 'clear'];
+const STRUCTURAL_OPS = ['insertRows', 'deleteRows', 'insertColumns', 'deleteColumns', 'addSheet', 'deleteSheet'];
 
 /**
  * Resolve an op's target. Sheet by name for now; protocol.md prefers sheetId
@@ -78,6 +79,15 @@ function countNonEmpty_(grid) {
 function inspectOp_(ss, op) {
   const base = { opId: op.opId || null, type: op.type, ok: true };
 
+  // The history sheet holds the undo payloads. An op that touches it — from a
+  // confused model or a hostile cell — would let an edit destroy its own undo.
+  if (op.sheetName === HISTORY_SHEET || op.name === HISTORY_SHEET) {
+    return { ok: false, type: op.type,
+      error: { code: 'PROTECTED_SHEET', message: 'That sheet belongs to the undo history.' } };
+  }
+
+  if (STRUCTURAL_OPS.indexOf(op.type) !== -1) return inspectStructural_(ss, op, base);
+
   if (VALUE_OPS.indexOf(op.type) === -1) {
     return { ok: false, type: op.type,
       error: { code: 'NOT_IMPLEMENTED', message: 'Unsupported op type: ' + op.type } };
@@ -125,6 +135,100 @@ function inspectOp_(ss, op) {
   return base;
 }
 
+/** "Sheet1!rows 3-5" / "Sheet1!cols 2-4" / "sheet 'Data'" — for cards and history. */
+function structTarget_(op, sheetName) {
+  if (op.type === 'addSheet') return "sheet '" + op.name + "'";
+  if (op.type === 'deleteSheet') return "sheet '" + sheetName + "'";
+  const count = Math.max(1, op.count || 1);
+  const unit = /Rows$/.test(op.type) ? 'rows' : 'cols';
+  const span = count > 1 ? op.index + '-' + (op.index + count - 1) : String(op.index);
+  return sheetName + '!' + unit + ' ' + span;
+}
+
+/**
+ * What would this structural op destroy?
+ *
+ * Inserts and addSheet destroy nothing and are never gated. Deleting rows or
+ * columns is gated exactly like `clear`: whenever the doomed span holds any
+ * content at all, because a delete leaves nothing behind to notice. Deleting a
+ * whole sheet always asks — and above the snapshot ceiling the confirmation
+ * says the one thing that matters: this one cannot be undone.
+ */
+function inspectStructural_(ss, op, base) {
+  const count = Math.max(1, op.count || 1);
+
+  if (op.type === 'addSheet') {
+    if (!op.name) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'addSheet needs a name.' } };
+    }
+    if (ss.getSheetByName(op.name)) {
+      return { ok: false, type: op.type,
+        error: { code: 'SHEET_EXISTS', message: "A sheet named '" + op.name + "' already exists." } };
+    }
+    base.target = structTarget_(op, op.name);
+    base.destructive = false;
+    base.reason = '';
+    return base;
+  }
+
+  const sheet = opSheet_(ss, op);
+  if (!sheet) {
+    return { ok: false, type: op.type,
+      error: { code: 'SHEET_NOT_FOUND', message: 'No sheet named ' + op.sheetName } };
+  }
+  base.target = structTarget_(op, sheet.getName());
+
+  if (op.type === 'insertRows' || op.type === 'insertColumns') {
+    if (!op.index || op.index < 1) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'index must be 1 or greater.' } };
+    }
+    base.destructive = false;
+    base.reason = '';
+    return base;
+  }
+
+  if (op.type === 'deleteRows' || op.type === 'deleteColumns') {
+    if (!op.index || op.index < 1) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'index must be 1 or greater.' } };
+    }
+    const rows = op.type === 'deleteRows';
+    const width = Math.max(1, rows ? sheet.getLastColumn() : sheet.getLastRow());
+    const block = rows
+      ? sheet.getRange(op.index, 1, count, width)
+      : sheet.getRange(1, op.index, width, count);
+    const occupied = countNonEmpty_(sanitizeGrid_(block.getValues()));
+    const formulas = countNonEmpty_(block.getFormulas());
+    base.occupied = occupied;
+    base.formulas = formulas;
+    base.destructive = occupied + formulas > 0;
+    base.reason = base.destructive
+      ? 'deletes ' + count + (rows ? ' row' : ' column') + (count === 1 ? '' : 's') +
+        ' holding ' + occupied + ' cell' + (occupied === 1 ? '' : 's') + ' of content'
+      : '';
+    return base;
+  }
+
+  // deleteSheet
+  if (ss.getSheets().filter(function (x) { return x.getName() !== HISTORY_SHEET; }).length <= 1) {
+    return { ok: false, type: op.type,
+      error: { code: 'LAST_SHEET', message: 'Cannot delete the only sheet.' } };
+  }
+  const lastRow = Math.max(1, sheet.getLastRow());
+  const lastCol = Math.max(1, sheet.getLastColumn());
+  const grid = sanitizeGrid_(sheet.getRange(1, 1, lastRow, lastCol).getValues());
+  const occupied = countNonEmpty_(grid);
+  const tooBig = JSON.stringify(grid).length > MAX_ENTRY_BYTES;
+  base.occupied = occupied;
+  base.destructive = true;   // always — a sheet is a big thing to lose
+  base.reason = "deletes the sheet '" + sheet.getName() + "' (" + occupied +
+    ' cell' + (occupied === 1 ? '' : 's') + ' of content)' +
+    (tooBig ? ' — TOO LARGE TO UNDO' : '');
+  return base;
+}
+
 /**
  * Dry run. Returns one inspection per op, in order, touching nothing.
  * The sidebar uses this to decide what to ask about before anything happens.
@@ -163,8 +267,73 @@ function newOpId_() {
   return 'op_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
 }
 
+/**
+ * Apply one already-gated structural op and record its inverse.
+ *
+ * Order is load-bearing on deletes: snapshot FIRST, then delete — the payload
+ * has to be captured while the cells still exist. Undo is the stored inverse:
+ * an insert is undone by deleting what it inserted; a delete by re-inserting
+ * the coordinates and rewriting the snapshot into them (History.gs).
+ */
+function applyStructural_(ss, op, turnId) {
+  const opId = op.opId || newOpId_();
+  const count = Math.max(1, op.count || 1);
+  let target;
+  let snapshot = null;
+  let inverse;
+  let sheetName;
+
+  if (op.type === 'addSheet') {
+    ss.insertSheet(op.name);
+    sheetName = op.name;
+    target = structTarget_(op, op.name);
+    inverse = { type: 'deleteSheet', name: op.name };
+  } else {
+    const sheet = opSheet_(ss, op);
+    sheetName = sheet.getName();
+    target = structTarget_(op, sheetName);
+
+    if (op.type === 'insertRows') {
+      sheet.insertRowsBefore(op.index, count);
+      inverse = { type: 'deleteRows', index: op.index, count: count };
+    } else if (op.type === 'insertColumns') {
+      sheet.insertColumnsBefore(op.index, count);
+      inverse = { type: 'deleteColumns', index: op.index, count: count };
+    } else if (op.type === 'deleteRows') {
+      const width = Math.max(1, sheet.getLastColumn());
+      snapshot = snapshotRange_(sheet, sheet.getRange(op.index, 1, count, width));
+      sheet.deleteRows(op.index, count);
+      inverse = { type: 'insertRows', index: op.index, count: count };
+    } else if (op.type === 'deleteColumns') {
+      const height = Math.max(1, sheet.getLastRow());
+      snapshot = snapshotRange_(sheet, sheet.getRange(1, op.index, height, count));
+      sheet.deleteColumns(op.index, count);
+      inverse = { type: 'insertColumns', index: op.index, count: count };
+    } else {  // deleteSheet
+      const lastRow = Math.max(1, sheet.getLastRow());
+      const lastCol = Math.max(1, sheet.getLastColumn());
+      snapshot = snapshotRange_(sheet, sheet.getRange(1, 1, lastRow, lastCol));
+      inverse = { type: 'recreateSheet', name: sheetName, index: sheet.getIndex() - 1 };
+      ss.deleteSheet(sheet);
+    }
+  }
+
+  SpreadsheetApp.flush();
+  const recorded = recordHistory_(opId, op.type, target, snapshot, turnId,
+    { structural: true, sheetName: sheetName, inverse: inverse });
+
+  return {
+    ok: true,
+    opId: opId,
+    type: op.type,
+    applied: target,
+    restorable: recorded.restorable,
+  };
+}
+
 /** Apply one already-gated op. Assumes inspection and confirmation happened. */
 function applyOne_(ss, op, turnId) {
+  if (STRUCTURAL_OPS.indexOf(op.type) !== -1) return applyStructural_(ss, op, turnId);
   const sheet = opSheet_(ss, op);
   const range = opRange_(sheet, op);
   const opId = op.opId || newOpId_();

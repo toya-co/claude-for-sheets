@@ -112,6 +112,83 @@ const TOOLS = [
       required: ['sheetName', 'a1'],
     },
   },
+  {
+    name: 'insert_rows',
+    description: 'Insert count blank rows (default 1). index is the 1-based row '
+      + 'number the new rows will occupy; existing rows shift down. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        index: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+      },
+      required: ['sheetName', 'index'],
+    },
+  },
+  {
+    name: 'delete_rows',
+    description: 'Delete count rows (default 1) starting at the 1-based index. '
+      + 'Asks the user first when the rows hold any content. Undoable.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        index: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+      },
+      required: ['sheetName', 'index'],
+    },
+  },
+  {
+    name: 'insert_columns',
+    description: 'Insert count blank columns (default 1). index is the 1-based '
+      + 'column NUMBER (A=1, B=2, …) the new columns will occupy; existing '
+      + 'columns shift right. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        index: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+      },
+      required: ['sheetName', 'index'],
+    },
+  },
+  {
+    name: 'delete_columns',
+    description: 'Delete count columns (default 1) starting at the 1-based '
+      + 'column NUMBER (A=1). Asks the user first when the columns hold any '
+      + 'content. Undoable.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        index: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+      },
+      required: ['sheetName', 'index'],
+    },
+  },
+  {
+    name: 'add_sheet',
+    description: 'Create a new empty tab with this name. Fails if the name is taken.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'delete_sheet',
+    description: 'Delete a whole tab. ALWAYS asks the user first. Undoable '
+      + 'unless the sheet is too large to snapshot — the confirmation says so.',
+    inputSchema: {
+      type: 'object',
+      properties: { sheetName: { type: 'string' } },
+      required: ['sheetName'],
+    },
+  },
 ];
 
 /**

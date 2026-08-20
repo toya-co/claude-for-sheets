@@ -148,10 +148,18 @@ carries an explicit inverse.
 | `addSheet` | `{name}` | `deleteSheet` — no snapshot |
 | `deleteSheet` | `{sheetId}` | snapshot whole sheet + metadata, then recreate + rewrite |
 
-**`deleteSheet` needs a policy, not just a row.** A full-sheet snapshot can dwarf
-every other history entry combined. Above the cell-count threshold, require
-explicit confirmation and record the entry as non-restorable rather than
-silently capturing megabytes.
+**`deleteSheet`'s policy:** it always asks, even for an empty sheet — a tab is a
+big thing to lose. Above the snapshot ceiling (`MAX_ENTRY_BYTES`) the entry is
+recorded non-restorable and the confirmation says the one thing that matters:
+THIS CANNOT BE UNDONE. Deleting rows or columns is gated like `clear` — whenever
+the doomed span holds any content — because a delete leaves nothing behind to
+notice. Inserts and `addSheet` destroy nothing and never ask.
+
+**Structural ops conflict with everything on their sheet for undo purposes,**
+in both directions. They change the coordinate space, so every other entry's
+recorded range on that sheet may no longer mean what it meant when written.
+Undo refuses (with the override) rather than reconciling ranges across shifts —
+walking back in reverse order always works, since each undo unblocks the next.
 
 ---
 
@@ -226,11 +234,12 @@ Oversized payloads fail the same silent way, so context reads are capped at
 ## Status
 
 Implemented: `getContext`, `inspectOps`, `applyOps`, `undoOp`, `getHistory`, and
-`applyOp` as a one-op convenience over `applyOps`. All four value ops work, with
-the gate and the guard.
+`applyOp` as a one-op convenience over `applyOps`. All four value ops and all
+six structural ops work, with the gate, the guard, and inverse-op undo. The
+hidden history sheet is protected from every op type (`PROTECTED_SHEET`).
 
-Not implemented: every structural op (M8), and `RANGE_TOO_LARGE` is not yet
-raised — an oversized range is capped at read time instead.
+Not implemented: `RANGE_TOO_LARGE` is not yet raised — an oversized range is
+capped at read time instead.
 
 The `Date` representation is still lossy in the write direction, as flagged
 above. It has not bitten yet because nothing writes dates back, but the moment

@@ -149,25 +149,26 @@ class FakeSheet {
 
   getName() { return this.name; }
   getSheetId() { return this.sheetId; }
-  getIndex() { return this.sheetId + 1; }
+  getIndex() {
+    return this._parent ? this._parent.sheets.indexOf(this) + 1 : this.sheetId + 1;
+  }
   hideSheet() { this.hidden = true; return this; }
 
-  getLastRow() {
+  // Real Sheets counts a formula-only cell as content for getLastRow/Column
+  // (its computed value occupies the cell). The fake keeps values and formulas
+  // as separate layers, so it must scan both to stay faithful — scanning only
+  // values under-measured the data region and cost a formula its snapshot.
+  _last(pick) {
     let max = 0;
-    for (const k of this.layers.values.keys()) {
-      const [r] = k.split(':').map(Number);
-      if (this.layers.values.get(k) !== '') max = Math.max(max, r);
+    for (const layer of ['values', 'formulas']) {
+      for (const [k, v] of this.layers[layer]) {
+        if (v !== '') max = Math.max(max, pick(k.split(':').map(Number)));
+      }
     }
     return max;
   }
-  getLastColumn() {
-    let max = 0;
-    for (const k of this.layers.values.keys()) {
-      const [, c] = k.split(':').map(Number);
-      if (this.layers.values.get(k) !== '') max = Math.max(max, c);
-    }
-    return max;
-  }
+  getLastRow() { return this._last(([r]) => r); }
+  getLastColumn() { return this._last(([, c]) => c); }
   getRange(a1OrRow, col, rows, cols) {
     if (typeof a1OrRow === 'string') {
       const p = parseA1(a1OrRow);
@@ -176,6 +177,35 @@ class FakeSheet {
     return new FakeRange(this, a1OrRow, col, rows === undefined ? 1 : rows,
                          cols === undefined ? 1 : cols);
   }
+  getMaxRows() { return Math.max(this.getLastRow(), 100); }
+  getMaxColumns() { return Math.max(this.getLastColumn(), 26); }
+
+  /**
+   * Structural shifts. Cells live in sparse Maps keyed "r:c", so a shift is a
+   * rekeying: every cell at or past the insertion point moves by `count`, and a
+   * deletion drops the doomed span and pulls the rest back. Mirrors what Sheets
+   * does to the coordinate space, which is the whole reason structural ops
+   * cannot be undone by a value snapshot alone.
+   */
+  _rekey(axis, from, delta, dropSpan) {
+    for (const layer of Object.keys(this.layers)) {
+      const next = new Map();
+      for (const [key, v] of this.layers[layer]) {
+        let [r, c] = key.split(':').map(Number);
+        let dim = axis === 'row' ? r : c;
+        if (dropSpan && dim >= from && dim < from + dropSpan) continue;
+        if (dropSpan && dim >= from + dropSpan) dim -= dropSpan;
+        else if (!dropSpan && dim >= from) dim += delta;
+        if (axis === 'row') r = dim; else c = dim;
+        next.set(r + ':' + c, v);
+      }
+      this.layers[layer] = next;
+    }
+  }
+  insertRowsBefore(at, n) { this._rekey('row', at, n, 0); return this; }
+  deleteRows(at, n) { this._rekey('row', at, 0, n); return this; }
+  insertColumnsBefore(at, n) { this._rekey('col', at, n, 0); return this; }
+  deleteColumns(at, n) { this._rekey('col', at, 0, n); return this; }
   /** Seed cells from a grid anchored at a1. Test convenience, not an API mirror. */
   seed(a1, grid, layer) {
     const p = parseA1(a1);
@@ -187,18 +217,29 @@ class FakeSheet {
 
 class FakeSpreadsheet {
   constructor(names) {
-    this.sheets = names.map((n, i) => new FakeSheet(n, i));
+    this._nextId = 0;
+    this.sheets = names.map((n) => this._make(n));
     this.id = 'fake-spreadsheet-id';
+  }
+  _make(name) {
+    const s = new FakeSheet(name, this._nextId++);
+    s._parent = this;
+    return s;
   }
   getId() { return this.id; }
   getName() { return 'Fake Spreadsheet'; }
   getSheets() { return this.sheets; }
   getSheetByName(n) { return this.sheets.filter((s) => s.getName() === n)[0] || null; }
   getActiveSheet() { return this.sheets[0]; }
-  insertSheet(name) {
-    const s = new FakeSheet(name, this.sheets.length);
-    this.sheets.push(s);
+  /** index, when given, is 0-based insertion position — the Apps Script contract. */
+  insertSheet(name, index) {
+    const s = this._make(name);
+    if (index === undefined) this.sheets.push(s);
+    else this.sheets.splice(index, 0, s);
     return s;
+  }
+  deleteSheet(sheet) {
+    this.sheets = this.sheets.filter((x) => x !== sheet);
   }
 }
 

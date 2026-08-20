@@ -29,7 +29,9 @@ test('the tool vocabulary maps 1:1 onto the op protocol', async () => {
   const res = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
   const names = res.result.tools.map((t) => t.name);
   assert.deepStrictEqual(names,
-    ['read_range', 'set_values', 'set_formulas', 'set_formats', 'clear_range']);
+    ['read_range', 'set_values', 'set_formulas', 'set_formats', 'clear_range',
+     'insert_rows', 'delete_rows', 'insert_columns', 'delete_columns',
+     'add_sheet', 'delete_sheet']);
   for (const t of res.result.tools) {
     assert.ok(t.description.length > 20, t.name + ' explains itself to the model');
     assert.strictEqual(t.inputSchema.type, 'object', t.name + ' has a schema');
@@ -42,6 +44,12 @@ test('every write tool requires its target and payload', async () => {
   assert.deepStrictEqual(byName.set_formulas.inputSchema.required, ['sheetName', 'a1', 'formulas']);
   assert.deepStrictEqual(byName.set_formats.inputSchema.required, ['sheetName', 'a1', 'format']);
   assert.deepStrictEqual(byName.clear_range.inputSchema.required, ['sheetName', 'a1']);
+  assert.deepStrictEqual(byName.insert_rows.inputSchema.required, ['sheetName', 'index']);
+  assert.deepStrictEqual(byName.delete_rows.inputSchema.required, ['sheetName', 'index']);
+  assert.deepStrictEqual(byName.insert_columns.inputSchema.required, ['sheetName', 'index']);
+  assert.deepStrictEqual(byName.delete_columns.inputSchema.required, ['sheetName', 'index']);
+  assert.deepStrictEqual(byName.add_sheet.inputSchema.required, ['name']);
+  assert.deepStrictEqual(byName.delete_sheet.inputSchema.required, ['sheetName']);
   assert.ok(!byName.read_range.inputSchema.required, 'read_range args are all optional');
 });
 

@@ -55,9 +55,9 @@
 
     <main>
       <div class="banner" id="banner">
-        Claude reads and edits this sheet with live tools. Every change is its own
-        undo entry, and anything that would overwrite existing content asks first.
-        Row and column edits come later.
+        Claude reads and edits this sheet with live tools — values, formulas,
+        formatting, rows, columns, and tabs. Every change is its own undo entry,
+        and anything destructive asks first.
       </div>
       <div id="log"></div>
       <div class="hist" id="hist" style="display:none"></div>
@@ -234,6 +234,10 @@
         return type === 'clear' ? 'cleared'
              : type === 'setFormats' ? 'formatted'
              : type === 'setFormulas' ? 'set formulas in'
+             : type === 'insertRows' || type === 'insertColumns' ? 'inserted'
+             : type === 'deleteRows' || type === 'deleteColumns' ? 'deleted'
+             : type === 'addSheet' ? 'added'
+             : type === 'deleteSheet' ? 'deleted'
              : 'wrote';
       }
 
@@ -277,11 +281,31 @@
       // The confirmation gate stays in Apps Script (Ops.gs), exactly as before.
       // This code just renders the question when applyOps stops to ask.
 
+      // Each entry turns a tool call's args into an op envelope, plus what to
+      // show while it runs. Structural tools address rows/columns/tabs rather
+      // than an a1 range, hence builders instead of a fixed field mapping.
+      const span = (a) => a.count > 1 ? a.index + '-' + (a.index + a.count - 1) : a.index;
       const TOOL_OPS = {
-        set_values:   { type: 'setValues',   verb: 'writing',    payload: 'values' },
-        set_formulas: { type: 'setFormulas', verb: 'writing',    payload: 'formulas' },
-        set_formats:  { type: 'setFormats',  verb: 'formatting', payload: 'format' },
-        clear_range:  { type: 'clear',       verb: 'clearing',   payload: 'what' },
+        set_values:     (a) => ({ op: { type: 'setValues', sheetName: a.sheetName, a1: a.a1, values: a.values },
+                                  verb: 'writing', where: a.sheetName + '!' + a.a1 }),
+        set_formulas:   (a) => ({ op: { type: 'setFormulas', sheetName: a.sheetName, a1: a.a1, formulas: a.formulas },
+                                  verb: 'writing', where: a.sheetName + '!' + a.a1 }),
+        set_formats:    (a) => ({ op: { type: 'setFormats', sheetName: a.sheetName, a1: a.a1, format: a.format },
+                                  verb: 'formatting', where: a.sheetName + '!' + a.a1 }),
+        clear_range:    (a) => ({ op: { type: 'clear', sheetName: a.sheetName, a1: a.a1, what: a.what },
+                                  verb: 'clearing', where: a.sheetName + '!' + a.a1 }),
+        insert_rows:    (a) => ({ op: { type: 'insertRows', sheetName: a.sheetName, index: a.index, count: a.count || 1 },
+                                  verb: 'inserting rows', where: a.sheetName + '!rows ' + span(a) }),
+        delete_rows:    (a) => ({ op: { type: 'deleteRows', sheetName: a.sheetName, index: a.index, count: a.count || 1 },
+                                  verb: 'deleting rows', where: a.sheetName + '!rows ' + span(a) }),
+        insert_columns: (a) => ({ op: { type: 'insertColumns', sheetName: a.sheetName, index: a.index, count: a.count || 1 },
+                                  verb: 'inserting columns', where: a.sheetName + '!cols ' + span(a) }),
+        delete_columns: (a) => ({ op: { type: 'deleteColumns', sheetName: a.sheetName, index: a.index, count: a.count || 1 },
+                                  verb: 'deleting columns', where: a.sheetName + '!cols ' + span(a) }),
+        add_sheet:      (a) => ({ op: { type: 'addSheet', name: a.name },
+                                  verb: 'adding sheet', where: a.name }),
+        delete_sheet:   (a) => ({ op: { type: 'deleteSheet', sheetName: a.sheetName },
+                                  verb: 'deleting sheet', where: a.sheetName }),
       };
 
       function postOpResult(callId, result) {
@@ -325,22 +349,17 @@
           return;
         }
 
-        const map = TOOL_OPS[ev.name];
-        if (!map) {
+        const build = TOOL_OPS[ev.name];
+        if (!build) {
           node.className = 'op err';
           node.textContent = 'unknown tool: ' + ev.name;
           postOpResult(ev.callId, { error: 'unknown tool: ' + ev.name });
           return;
         }
 
-        const op = {
-          type: map.type,
-          sheetName: ev.args.sheetName,
-          a1: ev.args.a1,
-        };
-        op[map.payload] = ev.args[map.payload];
-        node.innerHTML = esc(map.verb) + ' <span class="a1">' + esc(where) + '</span>…';
-        submitToolOp(ev.callId, op, node, []);
+        const planned = build(ev.args || {});
+        node.innerHTML = esc(planned.verb) + ' <span class="a1">' + esc(planned.where) + '</span>…';
+        submitToolOp(ev.callId, planned.op, node, []);
       }
 
       function submitToolOp(callId, op, node, confirmed) {

@@ -21,11 +21,11 @@ Nothing is hosted. No Google tokens are stored anywhere, by anyone.
 
 ## Status
 
-**M5.7 — Claude works your sheet with live tools.** It reads ranges when it
-needs to, edits through tool calls, sees each result, and keeps going — like
-Claude in Chrome, wrapped in your sidebar. Turns continue each other, every
-change is its own undo entry, and anything that would overwrite your data asks
-first.
+**M8 — Claude works your sheet with live tools, structure included.** It reads
+ranges when it needs to, edits values, formulas, formats, rows, columns, and
+tabs through tool calls, sees each result, and keeps going — like Claude in
+Chrome, wrapped in your sidebar. Turns continue each other, every change is its
+own undo entry, and anything destructive asks first.
 
 | Milestone | State |
 |---|---|
@@ -38,7 +38,8 @@ first.
 | M5 multi-op turns + confirmation gate | ✅ four value ops, per-op undo, stale-context guard |
 | M5.7 live tool loop (read, write, continue) | ✅ verified end to end |
 | M7 restorable history | ✅ undo any entry; blocked when a later edit overlaps |
-| M5.5 web search and fetch, behind the gate | next |
+| M8 rows, columns, and tabs — with undo | ✅ deletes snapshot first; sheet deletes always ask |
+| M9 mid-turn edit detection | next |
 
 Full plan in [`ARCHITECTURE.md`](ARCHITECTURE.md). The platform verification
 behind it is in [`PLAN.md`](PLAN.md).

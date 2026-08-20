@@ -161,8 +161,8 @@ src/dashboard.js  dashboard HTML
 
 ## Status
 
-M5.7 complete — the tool loop over MCP. Claude reads and edits through real
-tools; the sidebar executes every call behind the M5 gate, and each write stays
-its own undo entry. Verified end to end with a scripted sidebar stand-in: a
-null-context turn produced read_range, a correct =SUM formula, a label, and
-bold, in one conversation. M5.5 (web search/fetch behind the gate) is next.
+M8 complete. Eleven tools: read, four value ops, and six structural ops (rows,
+columns, tabs) with inverse-op undo. Verified live through the loop: "delete the
+Gadget row" produced read_range, the correct delete_rows index derived from what
+it read, and add_sheet — one conversation. M9 (mid-turn edit detection) and M5.5
+(web search/fetch behind the gate) are next.

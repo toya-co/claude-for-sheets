@@ -84,12 +84,16 @@ function restoreSnapshot_(snap) {
  *
  * One entry per op, never per turn. A turn that edits two places is two entries
  * the user can undo independently — `turnId` only groups them for display.
+ *
+ * `snapshot` may be null: inserting rows or adding a sheet needs no payload to
+ * undo, only its inverse op. `extra` lands on the index entry itself — for
+ * structural ops it carries {structural: true, sheetName, inverse: {…}}.
  */
-function recordHistory_(opId, opType, target, snapshot, turnId) {
-  const json = JSON.stringify(snapshot);
-  const restorable = json.length <= MAX_ENTRY_BYTES;
+function recordHistory_(opId, opType, target, snapshot, turnId, extra) {
+  const json = snapshot ? JSON.stringify(snapshot) : null;
+  const restorable = json ? json.length <= MAX_ENTRY_BYTES : true;
 
-  if (restorable) {
+  if (json && restorable) {
     const sheet = historySheet_();
     const chunks = [];
     for (let i = 0; i < json.length; i += CELL_CHUNK) {
@@ -99,22 +103,26 @@ function recordHistory_(opId, opType, target, snapshot, turnId) {
   }
 
   const index = readIndex_();
-  index.unshift({           // newest first, per the vault-wide log convention
+  const entry = {          // newest first, per the vault-wide log convention
     opId: opId,
     turnId: turnId || null,
     at: new Date().toISOString(),
     type: opType,
     target: target,
-    // Kept apart from `target` so overlap can be computed without re-parsing a
-    // display string. See laterOverlaps_().
-    sheetName: snapshot.sheetName,
-    a1: snapshot.a1,
-    bytes: json.length,
+    // Kept apart from `target` so conflicts can be computed without re-parsing
+    // a display string. See laterOverlaps_().
+    sheetName: snapshot ? snapshot.sheetName : null,
+    a1: snapshot ? snapshot.a1 : null,
+    bytes: json ? json.length : 0,
     restorable: restorable,
     undone: false,
-  });
+  };
+  if (extra) {
+    for (const k in extra) entry[k] = extra[k];
+  }
+  index.unshift(entry);
   writeIndex_(index);
-  return { restorable: restorable, bytes: json.length };
+  return { restorable: restorable, bytes: entry.bytes };
 }
 
 function loadSnapshot_(opId) {
@@ -147,31 +155,95 @@ function rangesOverlap_(sheet, a1A, a1B) {
 }
 
 /**
- * Entries newer than this one that touched the same cells.
+ * Do two history entries conflict for undo purposes?
  *
- * This is what makes per-op undo safe. Restoring an entry rewrites its whole
- * range from a snapshot taken *before* it ran, so if a later edit touched any of
- * those cells, undoing the earlier one silently reverts the later one too — with
- * the later entry still listed as applied. Disjoint edits, which is the normal
- * case, are unaffected.
+ * Value ops conflict when their rectangles share a cell on the same sheet.
+ * A structural op conflicts with EVERYTHING on its sheet, in both directions:
+ * it changed the coordinate space, so every other entry's recorded range on
+ * that sheet may no longer mean what it meant when it was written. Refusing is
+ * the honest answer; precise reconciliation across shifts is not worth its bugs.
+ */
+function conflicts_(entry, other) {
+  if (!entry.sheetName || !other.sheetName) return false;
+  if (entry.sheetName !== other.sheetName) return false;
+  if (entry.structural || other.structural) return true;
+  if (!entry.a1 || !other.a1) return false;
+  const sheet = writeSpreadsheet_().getSheetByName(entry.sheetName);
+  if (!sheet) return false;
+  try {
+    return rangesOverlap_(sheet, entry.a1, other.a1);
+  } catch (e) {
+    return false;   // an unparseable stored range should not block an undo
+  }
+}
+
+/**
+ * Entries newer than this one that its undo would disturb.
+ *
+ * This is what makes per-op undo safe. Restoring an entry rewrites state from
+ * before it ran, so if a later edit touched the same cells — or shifted the
+ * same sheet's coordinates — undoing the earlier one silently corrupts the
+ * later one, which would still be listed as applied. Disjoint edits, the
+ * normal case, are unaffected.
  *
  * The index is newest-first, so "newer" is everything before this entry's slot.
  */
 function laterOverlaps_(index, entry) {
-  if (!entry.a1 || !entry.sheetName) return [];   // pre-M5 entry, no range recorded
-  const sheet = writeSpreadsheet_().getSheetByName(entry.sheetName);
-  if (!sheet) return [];
-
   const slot = index.findIndex((e) => e.opId === entry.opId);
   const blockers = [];
   for (let i = 0; i < slot; i++) {
     const other = index[i];
-    if (other.undone || !other.a1 || other.sheetName !== entry.sheetName) continue;
-    try {
-      if (rangesOverlap_(sheet, entry.a1, other.a1)) blockers.push(other);
-    } catch (e) { /* an unparseable stored range should not block an undo */ }
+    if (other.undone) continue;
+    if (conflicts_(entry, other)) blockers.push(other);
   }
   return blockers;
+}
+
+/**
+ * Undo a structural entry by running its stored inverse.
+ *
+ * Delete-undo is insert-then-rewrite: the coordinates are recreated first, and
+ * restoreSnapshot_ then lands on the same A1 the snapshot was taken from.
+ */
+function applyInverse_(entry) {
+  const ss = writeSpreadsheet_();
+  const inv = entry.inverse;
+  if (!inv) throw new Error('Structural entry has no inverse recorded.');
+
+  const needSheet = () => {
+    const sheet = ss.getSheetByName(entry.sheetName);
+    if (!sheet) throw new Error('Sheet no longer exists: ' + entry.sheetName);
+    return sheet;
+  };
+  const needSnapshot = () => {
+    const snap = loadSnapshot_(entry.opId);
+    if (!snap) throw new Error('Snapshot missing — the history sheet may have been deleted.');
+    return snap;
+  };
+
+  if (inv.type === 'deleteRows') {            // undoing an insert
+    needSheet().deleteRows(inv.index, inv.count);
+  } else if (inv.type === 'insertRows') {     // undoing a delete: recreate, refill
+    needSheet().insertRowsBefore(inv.index, inv.count);
+    restoreSnapshot_(needSnapshot());
+  } else if (inv.type === 'deleteColumns') {
+    needSheet().deleteColumns(inv.index, inv.count);
+  } else if (inv.type === 'insertColumns') {
+    needSheet().insertColumnsBefore(inv.index, inv.count);
+    restoreSnapshot_(needSnapshot());
+  } else if (inv.type === 'deleteSheet') {    // undoing addSheet
+    ss.deleteSheet(needSheet());
+  } else if (inv.type === 'recreateSheet') {  // undoing deleteSheet
+    if (ss.getSheetByName(inv.name)) {
+      throw new Error("A sheet named '" + inv.name + "' already exists.");
+    }
+    ss.insertSheet(inv.name, inv.index);
+    restoreSnapshot_(needSnapshot());
+  } else {
+    throw new Error('Unknown inverse type: ' + inv.type);
+  }
+  SpreadsheetApp.flush();
+  return entry.target;
 }
 
 /**
@@ -202,11 +274,16 @@ function undoOp(opId, force) {
     }
   }
 
-  const snap = loadSnapshot_(opId);
-  if (!snap) throw new Error('Snapshot missing — the history sheet may have been deleted.');
-
-  restoreSnapshot_(snap);
+  let restored;
+  if (entry.structural) {
+    restored = applyInverse_(entry);
+  } else {
+    const snap = loadSnapshot_(opId);
+    if (!snap) throw new Error('Snapshot missing — the history sheet may have been deleted.');
+    restoreSnapshot_(snap);
+    restored = snap.sheetName + '!' + snap.a1;
+  }
   entry.undone = true;
   writeIndex_(index);
-  return { ok: true, opId: opId, restored: snap.sheetName + '!' + snap.a1 };
+  return { ok: true, opId: opId, restored: restored };
 }
