@@ -32,6 +32,8 @@ not slide with use.
 | `POST /unpair` | `{spreadsheetId}` — revokes |
 | `POST /bridge/call` | MCP bridge only — token-gated; relays a tool call to the sidebar |
 | `POST /op-result` | Sidebar answering a tool call; the unguessable `callId` is the credential |
+| `POST /gate` | Web-gate hook only — token-gated; relays a web-access request to the sidebar |
+| `POST /gate-result` | Sidebar answering one; the unguessable `gateId` is the credential. No answer = deny |
 
 ### `/turn` event vocabulary
 
@@ -40,6 +42,7 @@ not slide with use.
 {type:'paired'}                              approved, proceeding
 {type:'session', model, sessionId, resumed}   Claude started
 {type:'tool_call', callId, name, args}       execute this and POST /op-result
+{type:'gate', gateId, tool, detail}          ask the human, POST /gate-result
 {type:'text', delta}                         incremental output
 {type:'done', costUsd, usage}                turn complete
 {type:'error', code, message}                AUTH_FAILED · CLI_NOT_FOUND · PAIRING_DENIED · …

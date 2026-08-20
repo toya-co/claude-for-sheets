@@ -21,14 +21,16 @@ Nothing is hosted. No Google tokens are stored anywhere, by anyone.
 
 ## Status
 
-**M8.5 — Claude works your sheet with live tools, near-parity coverage.** It
-reads ranges when it needs to, then edits values, formulas, and formats (fonts,
+**M5.5 — web access, gated. M8.5 — near-parity sheet coverage.**
+Claude reads ranges when it needs to, then edits values, formulas, and formats (fonts,
 sizes, wrap, alignment); merges, sorts, resizes, freezes, hides, and renames;
 and restructures rows, columns, and tabs — seeing each result and continuing,
 like Claude in Chrome, wrapped in your sidebar. Turns continue each other,
-every change is its own undo entry, and anything destructive asks first. Not
-yet: borders, conditional formatting, data validation, notes, charts — it will
-say so rather than improvise.
+every change is its own undo entry, and anything destructive asks first. It can
+also search the web and fetch pages — each request stops at an Allow/Skip card
+showing the full URL, and local/private addresses are refused automatically.
+Not yet: borders, conditional formatting, data validation, notes, charts — it
+will say so rather than improvise.
 
 | Milestone | State |
 |---|---|
@@ -44,7 +46,8 @@ say so rather than improvise.
 | M8 rows, columns, and tabs — with undo | ✅ deletes snapshot first; sheet deletes always ask |
 | M9 mid-turn edit detection | ✅ your typing aborts Claude's write, never the reverse |
 | M8.5 capability parity tier 1 | ✅ merge, sort, resize, freeze, hide, rename — all undoable |
-| M5.5 web search and fetch, behind the gate | next |
+| M5.5 web search and fetch, behind the gate | ✅ every request is an Allow/Skip card; local addresses auto-refused |
+| Tier 2 capabilities (borders, validation, notes, …) | next |
 
 Full plan in [`ARCHITECTURE.md`](ARCHITECTURE.md). The platform verification
 behind it is in [`PLAN.md`](PLAN.md).

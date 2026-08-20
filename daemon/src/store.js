@@ -29,6 +29,10 @@ const DEFAULTS = {
     // premium model. A spreadsheet edit rarely needs one — and every turn pays
     // ~25k tokens of CLI baseline overhead, so model choice dominates cost.
     model: 'claude-sonnet-5',
+    // Web search and fetch, each request approved in the sidebar (M5.5).
+    // Defaults on because the gate is always in front of it; false removes the
+    // web tools from the CLI invocation entirely.
+    webAccess: true,
   },
 };
 

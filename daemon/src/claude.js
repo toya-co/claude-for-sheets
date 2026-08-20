@@ -26,6 +26,16 @@
 
 const { spawn, execFileSync } = require('child_process');
 const { randomUUID } = require('crypto');
+const path = require('path');
+
+/**
+ * The CLI kills a hook that outlives this, and a killed hook is
+ * indistinguishable from no hook — which, with the web tools allowlisted,
+ * fails OPEN. So the layers must nest: daemon gate timeout (240s) < the
+ * hook's own self-timeout (270s, web-gate.js) < this (300s). The isolation
+ * tests assert the ordering.
+ */
+const WEB_HOOK_TIMEOUT_S = 300;
 
 /**
  * Resolve the CLI to an absolute path ONCE, then spawn it with shell:false.
@@ -83,6 +93,20 @@ const DEFAULT_SYSTEM_PROMPT = [
   '',
   'Be concise. Answer the question asked. Prefer making the change over explaining',
   'at length what you are about to do.',
+].join('\n');
+
+/**
+ * Appended to the system prompt only when web access is enabled, so the model
+ * neither offers a capability it lacks nor denies one it has.
+ */
+const WEB_PROMPT = [
+  '',
+  '',
+  'You can also search the web and fetch pages. Every web request is shown to',
+  'the user for approval first — call the tool directly and let that happen;',
+  'do not ask permission in prose too. A result saying the request was refused',
+  'is the user\'s decision: respect it. Never put spreadsheet content into a',
+  'search query or URL unless the user asked for exactly that.',
 ].join('\n');
 
 function resolveCli_() {
@@ -276,29 +300,58 @@ function buildArgs_(prompt, opts, sessionId, resuming) {
     // wrong context, wasted tokens, and hooks or MCP servers that can misfire
     // on work that has nothing to do with code.
 
-    // Replace the coding-agent system prompt outright.
-    '--system-prompt', opts.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+    // Replace the coding-agent system prompt outright. Stable per session
+    // (it heads the cached prefix); the web paragraph joins only when web
+    // access is on, which is a per-user setting, not a per-turn one.
+    '--system-prompt', opts.systemPrompt ||
+      (opts.webAccess ? DEFAULT_SYSTEM_PROMPT + WEB_PROMPT : DEFAULT_SYSTEM_PROMPT),
 
     // No MCP servers, regardless of what the user has configured globally.
     '--strict-mcp-config',
 
-    // No built-in tools at all. That MUST stay an allowlist of nothing rather
-    // than a denylist: a denylist naming ten tools silently failed open — a
-    // live init line reported eighteen others still available, including
-    // CronCreate, Workflow, SendMessage, and Skill. A denylist can only exclude
-    // the tools that existed when it was written.
-    '--tools', '',
+    // Built-in tools stay an ALLOWLIST, never a denylist: a denylist naming
+    // ten tools silently failed open — a live init line reported eighteen
+    // others still available, including CronCreate, Workflow, SendMessage,
+    // and Skill. A denylist can only exclude the tools that existed when it
+    // was written. The allowlist is nothing — or, with web access on, exactly
+    // the two web tools, each gated by the PreToolUse hook below.
+    '--tools', opts.webAccess ? 'WebSearch,WebFetch' : '',
   ];
   if (opts.model) args.push('--model', opts.model);
 
-  // The only tools Claude gets are ours: the sheets MCP server, whose every
+  // Web access rides on the CLI's own WebSearch/WebFetch (server-side search,
+  // no API key), but headless print mode has NO permission UI: an allowlisted
+  // tool runs immediately, unprompted — verified live 2026-08-20. The
+  // PreToolUse hook is therefore the entire gate: it holds every web call
+  // while the daemon relays it to the sidebar for the user's Allow/Skip, and
+  // auto-denies private/loopback targets (web-gate.js). --settings merges
+  // with the user's own settings, so this adds a hook without erasing theirs.
+  if (opts.webAccess) {
+    args.push('--settings', JSON.stringify({
+      hooks: {
+        PreToolUse: [{
+          matcher: 'WebFetch|WebSearch',
+          hooks: [{
+            type: 'command',
+            command: 'node "' + path.join(__dirname, 'web-gate.js').replace(/\\/g, '/') + '"',
+            timeout: WEB_HOOK_TIMEOUT_S,
+          }],
+        }],
+      },
+    }));
+  }
+
+  // The rest of the grant is ours alone: the sheets MCP server, whose every
   // call is relayed to the sidebar and executed through Apps Script, behind the
-  // confirmation gate in Ops.gs. --allowedTools grants that one server
-  // headlessly (verified: init lists exactly mcp__sheets__* and nothing else);
+  // confirmation gate in Ops.gs. --allowedTools grants headlessly (verified:
+  // init lists exactly what is named here and nothing else);
   // --strict-mcp-config above keeps the user's own MCP servers out.
   if (opts.mcpConfig) {
     args.push('--mcp-config', JSON.stringify(opts.mcpConfig));
-    args.push('--allowedTools', 'mcp__sheets');
+    args.push('--allowedTools',
+      opts.webAccess ? 'mcp__sheets,WebSearch,WebFetch' : 'mcp__sheets');
+  } else if (opts.webAccess) {
+    args.push('--allowedTools', 'WebSearch,WebFetch');
   }
   return args;
 }
@@ -322,7 +375,10 @@ function attempt_(prompt, emit, opts, sessionId, resuming) {
 
     // shell:false — argv goes straight to the OS, never through a shell.
     // cwd is a neutral workspace so no CLAUDE.md is discovered by tree walk.
-    const child = spawn(cli, args, { shell: false, cwd: opts.cwd || process.cwd() });
+    // opts.env rides on top of ours: the web-gate hook inherits the CLI's
+    // environment, which is how the turn token reaches it (verified live).
+    const child = spawn(cli, args, { shell: false, cwd: opts.cwd || process.cwd(),
+      env: { ...process.env, ...(opts.env || {}) } });
 
     // The parser owns shape; this function owns the process and the buffering.
     // 'open' is the one event that has to escape the hold — it is the proof the
@@ -418,4 +474,5 @@ function checkCli() {
   });
 }
 
-module.exports = { runTurn, checkCli, buildArgs_, createParser_, extractPartialText_, extractMessageText_ };
+module.exports = { runTurn, checkCli, buildArgs_, createParser_, extractPartialText_,
+                   extractMessageText_, WEB_HOOK_TIMEOUT_S };

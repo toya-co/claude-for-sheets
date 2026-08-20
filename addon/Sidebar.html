@@ -198,6 +198,54 @@
         }).catch(() => {});
       }
 
+      // ---- the web-access gate ---------------------------------------------
+      //
+      // {type:'gate', gateId, tool, detail}: Claude wants to search or fetch,
+      // and the CLI-side hook is holding the call until a human answers. This
+      // is a SECURITY boundary, not a courtesy — untrusted cell content plus
+      // outbound network is an exfiltration channel, so the card shows the
+      // full URL or query, exactly what would leave the machine. No answer
+      // means no: the daemon denies on timeout, so a closed sidebar is safe.
+
+      function postGateResult(gateId, allow) {
+        return fetch(DAEMON + '/gate-result', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gateId: gateId, allow: allow }),
+        }).catch(() => {});
+      }
+
+      function handleGate(ev, container) {
+        const node = container.appendChild(document.createElement('div'));
+        node.className = 'op ask';
+        const d = ev.detail || {};
+        const what = ev.tool === 'WebSearch'
+          ? 'search the web for<br><span class="a1">' + esc(d.query || '') + '</span>'
+          : 'fetch<br><span class="a1" style="word-break:break-all">' + esc(d.url || '') + '</span>';
+        node.innerHTML = 'Claude wants to ' + what +
+          '<div class="why">Check it for anything from your sheet you would not share.</div>';
+
+        const yes = document.createElement('button');
+        yes.textContent = 'Allow';
+        yes.onclick = () => {
+          node.className = 'op done';
+          node.innerHTML = (ev.tool === 'WebSearch' ? 'searched ' : 'fetched ') +
+            '<span class="a1" style="word-break:break-all">' + esc(d.query || d.url || '') + '</span>';
+          postGateResult(ev.gateId, true);
+        };
+        const no = document.createElement('button');
+        no.textContent = 'Skip';
+        no.style.marginLeft = '6px';
+        no.onclick = () => {
+          node.className = 'op';
+          node.innerHTML = 'skipped a web request';
+          postGateResult(ev.gateId, false);
+        };
+        node.appendChild(document.createElement('br'));
+        node.appendChild(yes);
+        node.appendChild(no);
+      }
+
       function handleToolCall(ev, container) {
         const node = container.appendChild(document.createElement('div'));
         node.className = 'op';
@@ -443,6 +491,8 @@
                 bubble.innerHTML = '';
               } else if (ev.type === 'tool_call') {
                 handleToolCall(ev, node);
+              } else if (ev.type === 'gate') {
+                handleGate(ev, node);
               } else if (ev.type === 'text') {
                 acc += ev.delta;
                 bubble.textContent = acc;

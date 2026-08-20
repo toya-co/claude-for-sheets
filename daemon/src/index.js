@@ -52,6 +52,43 @@ const toolCalls = new Map();
 const TOOL_CALL_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
+ * How long the sidebar gets to answer one web-access gate. MUST stay under the
+ * web-gate hook's self-timeout (270s), which stays under the CLI's hook
+ * timeout (300s): if the CLI ever kills the hook mid-wait, the tools are
+ * allowlisted and the miss fails OPEN. The isolation tests assert the nesting.
+ */
+const GATE_TIMEOUT_MS = 4 * 60 * 1000;
+
+// Pending web-access gates, keyed by gateId — same shape as toolCalls.
+const gates = new Map();
+
+/**
+ * Relay one web-access request to the sidebar and wait for the human.
+ * No answer means no: the gate is a security boundary, so silence denies.
+ */
+function relayGate(turn, tool, detail) {
+  return new Promise((resolve) => {
+    const gateId = randomBytes(16).toString('hex');
+    const timer = setTimeout(() => {
+      gates.delete(gateId);
+      resolve({ ok: true, allow: false, timedOut: true });
+    }, GATE_TIMEOUT_MS);
+
+    gates.set(gateId, { resolve, timer });
+    turn.send({ type: 'gate', gateId, tool, detail });
+  });
+}
+
+function settleGate(gateId, allow) {
+  const gate = gates.get(gateId);
+  if (!gate) return false;
+  clearTimeout(gate.timer);
+  gates.delete(gateId);
+  gate.resolve({ ok: true, allow: Boolean(allow) });
+  return true;
+}
+
+/**
  * Relay one bridge call to the sidebar and wait for /op-result.
  */
 function relayToolCall(turn, name, args) {
@@ -244,6 +281,10 @@ async function handleTurn(req, res) {
     sessionId: priorSession,
     resume: Boolean(priorSession),
     mcpConfig,
+    // Web tools behind the sidebar gate (M5.5). The hook reads the turn token
+    // from the CLI's environment and calls /gate with it.
+    webAccess: store.getSettings().webAccess !== false,
+    env: { SHEETS_TURN_TOKEN: turnToken, SHEETS_DAEMON_PORT: String(PORT) },
   });
   turns.delete(turnToken);
 
@@ -321,6 +362,22 @@ const server = https.createServer(loadCerts(), async (req, res) => {
         const turn = turns.get(token);
         if (!turn) return json(res, 403, { ok: false, error: 'unknown or finished turn' });
         return json(res, 200, await relayToolCall(turn, name, args));
+      }
+
+      // The web-gate hook asking whether a WebSearch/WebFetch may run. Same
+      // token boundary as /bridge/call — the hook inherits the token from the
+      // CLI's environment, which only this process set.
+      case 'POST /gate': {
+        const { token, tool, detail } = await readBody(req);
+        const turn = turns.get(token);
+        if (!turn) return json(res, 403, { ok: false, error: 'unknown or finished turn' });
+        return json(res, 200, await relayGate(turn, tool, detail));
+      }
+
+      // The sidebar answering one. The unguessable gateId is the credential.
+      case 'POST /gate-result': {
+        const { gateId, allow } = await readBody(req);
+        return json(res, 200, { settled: settleGate(gateId, allow) });
       }
 
       // The sidebar answering one. The unguessable callId is the credential.
