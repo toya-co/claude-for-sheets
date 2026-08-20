@@ -1,5 +1,6 @@
 /**
- * @OnlyCurrentDoc
+ * Do NOT add the OnlyCurrentDoc annotation here — see the note in Sheet.gs.
+ * It breaks undo across the whole add-on.
  *
  * Multi-op turns: inspection, the confirmation gate, and sequential execution.
  *

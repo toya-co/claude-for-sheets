@@ -1,5 +1,21 @@
 /**
- * @OnlyCurrentDoc
+ * The OnlyCurrentDoc annotation is deliberately absent, and must stay absent.
+ * Adding it breaks undo across the whole add-on, and the failure is a runtime
+ * exception on every write rather than a warning. (Written without its "@"
+ * prefix on purpose: Apps Script scans JSDoc for the literal token, so even
+ * naming it in a comment would switch it back on.)
+ *
+ * The annotation narrows the grant to `spreadsheets.currentonly`, which is what
+ * this product would rather ask for. But `currentonly` and
+ * `SpreadsheetApp.openById()` are mutually exclusive — Google's docs are explicit
+ * that a script restricted to the current document cannot call `openById` at all.
+ * And `openById` is the entire undo mechanism: it is the only measured way to
+ * write to this spreadsheet without landing in the user's native Ctrl+Z stack.
+ *
+ * So the choice is the broad `spreadsheets` scope with a working restorable
+ * history, or the narrow scope with agent edits tangled into the user's own undo
+ * stack. Decided: broad scope. Documented in ARCHITECTURE.md §1 and stated
+ * plainly in the README, because it is a real thing to ask of a user.
  *
  * Sheet I/O. The only file that touches SpreadsheetApp.
  *

@@ -6,8 +6,8 @@ click any past change to roll back to it, formats and formulas included.
 Two halves, both open source, no server involved:
 
 - **`addon/`** — a container-bound Apps Script add-on. Hosts the sidebar and does
-  all sheet I/O. Requests only `spreadsheets.currentonly`, so it can touch the
-  spreadsheet it is installed in and nothing else.
+  all sheet I/O. Requests the `spreadsheets` scope — see **The permission it
+  asks for** below, which is a real ask and worth reading before you install.
 - **`daemon/`** — a local app you run on your own machine. Holds your Claude
   credential, serves the sidebar over HTTPS loopback, and is also the dashboard.
 
@@ -86,6 +86,20 @@ than ten cells that already hold something asks. Clearing anything asks. Writing
 into empty cells does not, because that is not a risk. The check runs in Apps
 Script rather than the sidebar, so a prompt injection hidden in a cell cannot
 talk its way past it.
+
+**The permission it asks for.** Google's consent screen will say this add-on can
+see and edit **all** your spreadsheets, and that is accurate about the grant. It
+is not what the add-on does: every call it makes targets the spreadsheet it is
+installed in, the code is here to read, and no Google token is stored anywhere by
+anyone.
+
+The reason is a platform constraint rather than a choice. The narrow
+`spreadsheets.currentonly` scope and `SpreadsheetApp.openById()` are mutually
+exclusive in Apps Script, and `openById` is the only measured way to write
+without landing in your native Ctrl+Z stack. So the options were the broad scope
+with a real restorable history, or the narrow scope with Claude's edits tangled
+into your own undo. This build takes the first. If that trade is wrong for you,
+it is the one decision in the design worth forking over.
 
 **Agent edits do not touch your Ctrl+Z.** Writes go through
 `SpreadsheetApp.openById()` rather than the bound handle, which — measured, not

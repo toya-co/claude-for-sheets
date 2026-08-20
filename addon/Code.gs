@@ -1,5 +1,6 @@
 /**
- * @OnlyCurrentDoc
+ * Do NOT add the OnlyCurrentDoc annotation here — see the note in Sheet.gs.
+ * It breaks undo across the whole add-on.
  *
  * Entry points. Thin by design — sheet access lives in Sheet.gs, and the
  * sidebar orchestrates. Apps Script's only jobs are hosting the sidebar and
