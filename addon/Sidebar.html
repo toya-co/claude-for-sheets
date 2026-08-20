@@ -188,6 +188,25 @@
                                   verb: 'hiding sheet', where: a.sheetName }),
         show_sheet:     (a) => ({ op: { type: 'showSheet', sheetName: a.sheetName },
                                   verb: 'unhiding sheet', where: a.sheetName }),
+        set_borders:    (a) => ({ op: { type: 'setBorders', sheetName: a.sheetName, a1: a.a1,
+                                        top: a.top, bottom: a.bottom, left: a.left, right: a.right,
+                                        vertical: a.vertical, horizontal: a.horizontal,
+                                        color: a.color, style: a.style },
+                                  verb: 'bordering', where: a.sheetName + '!' + a.a1 }),
+        set_validation: (a) => ({ op: { type: 'setValidation', sheetName: a.sheetName, a1: a.a1, rule: a.rule },
+                                  verb: 'setting validation', where: a.sheetName + '!' + a.a1 }),
+        set_conditional_format: (a) => ({ op: { type: 'setConditionalFormat', sheetName: a.sheetName, a1: a.a1, rule: a.rule },
+                                  verb: 'adding conditional format', where: a.sheetName + '!' + a.a1 }),
+        clear_conditional_formats: (a) => ({ op: { type: 'clearConditionalFormats', sheetName: a.sheetName },
+                                  verb: 'clearing conditional formats', where: a.sheetName }),
+        set_note:       (a) => ({ op: { type: 'setNote', sheetName: a.sheetName, a1: a.a1, note: a.note },
+                                  verb: 'noting', where: a.sheetName + '!' + a.a1 }),
+        set_named_range: (a) => ({ op: { type: 'setNamedRange', name: a.name, sheetName: a.sheetName, a1: a.a1 },
+                                  verb: 'naming range', where: a.name + ' → ' + a.sheetName + '!' + a.a1 }),
+        delete_named_range: (a) => ({ op: { type: 'deleteNamedRange', name: a.name },
+                                  verb: 'deleting named range', where: a.name }),
+        duplicate_sheet: (a) => ({ op: { type: 'duplicateSheet', sheetName: a.sheetName, newName: a.newName },
+                                  verb: 'duplicating sheet', where: a.sheetName }),
       };
 
       function postOpResult(callId, result) {
@@ -394,6 +413,14 @@
              : type === 'renameSheet' ? 'renamed'
              : type === 'hideRows' || type === 'hideColumns' || type === 'hideSheet' ? 'hid'
              : type === 'showRows' || type === 'showColumns' || type === 'showSheet' ? 'unhid'
+             : type === 'setBorders' ? 'bordered'
+             : type === 'setValidation' ? 'set validation on'
+             : type === 'setConditionalFormat' ? 'added rule to'
+             : type === 'clearConditionalFormats' ? 'cleared rules on'
+             : type === 'setNote' ? 'noted'
+             : type === 'setNamedRange' ? 'named'
+             : type === 'deleteNamedRange' ? 'unnamed'
+             : type === 'duplicateSheet' ? 'duplicated'
              : 'wrote';
       }
 

@@ -34,14 +34,17 @@ function editWatermark_() {
 }
 
 const VALUE_OPS = ['setValues', 'setFormulas', 'setFormats', 'clear'];
-const STRUCTURAL_OPS = ['insertRows', 'deleteRows', 'insertColumns', 'deleteColumns', 'addSheet', 'deleteSheet'];
+const STRUCTURAL_OPS = ['insertRows', 'deleteRows', 'insertColumns', 'deleteColumns',
+                        'addSheet', 'deleteSheet', 'duplicateSheet'];
 
 /**
  * Range-scoped ops beyond plain writes. Same undo story as value ops — bounded
  * to a rectangle, snapshot restores it — so they share the rectangle-overlap
- * conflict rule. Merge additionally records the merges it displaced.
+ * conflict rule. Merge additionally records the merges it displaced; borders,
+ * notes, and validations ride the plain snapshot, which captures all three.
  */
-const RANGE_OPS = ['mergeCells', 'unmergeCells', 'sortRange'];
+const RANGE_OPS = ['mergeCells', 'unmergeCells', 'sortRange',
+                   'setBorders', 'setValidation', 'setNote'];
 
 /**
  * Layout ops change how the sheet *presents*, not what it holds: widths,
@@ -53,7 +56,109 @@ const RANGE_OPS = ['mergeCells', 'unmergeCells', 'sortRange'];
  */
 const LAYOUT_OPS = ['setColumnWidth', 'setRowHeight', 'freezePanes', 'renameSheet',
                     'hideRows', 'showRows', 'hideColumns', 'showColumns',
-                    'hideSheet', 'showSheet'];
+                    'hideSheet', 'showSheet',
+                    'setConditionalFormat', 'clearConditionalFormats',
+                    'setNamedRange', 'deleteNamedRange'];
+
+/** '#rrggbb' → the API's {red, green, blue} floats. */
+function hexColor_(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return { red: ((n >> 16) & 255) / 255, green: ((n >> 8) & 255) / 255, blue: (n & 255) / 255 };
+}
+
+const BORDER_STYLES = ['solid', 'dashed', 'dotted', 'thick', 'double', 'none'];
+
+function borderStyleEnum_(style) {
+  const map = {
+    solid: SpreadsheetApp.BorderStyle.SOLID,
+    dashed: SpreadsheetApp.BorderStyle.DASHED,
+    dotted: SpreadsheetApp.BorderStyle.DOTTED,
+    thick: SpreadsheetApp.BorderStyle.SOLID_THICK,
+    double: SpreadsheetApp.BorderStyle.DOUBLE,
+  };
+  return map[style || 'solid'] || SpreadsheetApp.BorderStyle.SOLID;
+}
+
+/**
+ * A sheet's conditional-format rules as the API's own JSON, via the Advanced
+ * Sheets service. SpreadsheetApp can enumerate rules but cannot read a rule's
+ * FORMAT back (BooleanCondition exposes the condition only), so honest
+ * undo — and therefore the whole feature — goes through the API, where a rule
+ * round-trips untouched.
+ */
+function condRules_(ss, sheet) {
+  const resp = Sheets.Spreadsheets.get(ss.getId(), {
+    fields: 'sheets(properties(sheetId),conditionalFormats)',
+  });
+  const entry = (resp.sheets || []).filter(function (s) {
+    return s.properties && s.properties.sheetId === sheet.getSheetId();
+  })[0];
+  return (entry && entry.conditionalFormats) || [];
+}
+
+/** Replace a sheet's rules wholesale: delete what is there, add what should be. */
+function setCondRules_(ss, sheet, rules) {
+  const current = condRules_(ss, sheet);
+  const requests = [];
+  for (let i = 0; i < current.length; i++) {
+    requests.push({ deleteConditionalFormatRule: { sheetId: sheet.getSheetId(), index: 0 } });
+  }
+  (rules || []).forEach(function (rule, i) {
+    requests.push({ addConditionalFormatRule: { rule: rule, index: i } });
+  });
+  if (requests.length) Sheets.Spreadsheets.batchUpdate({ requests: requests }, ss.getId());
+}
+
+/** Build one API rule from the model-facing spec. Returns null on a bad spec. */
+function condRuleFromSpec_(sheet, range, spec) {
+  const gridRange = {
+    sheetId: sheet.getSheetId(),
+    startRowIndex: range.getRow() - 1,
+    endRowIndex: range.getRow() - 1 + range.getNumRows(),
+    startColumnIndex: range.getColumn() - 1,
+    endColumnIndex: range.getColumn() - 1 + range.getNumColumns(),
+  };
+  if (spec && spec.gradient) {
+    const g = spec.gradient;
+    const point = function (color, type, value) {
+      if (!color) return null;
+      const p = { color: hexColor_(color), type: type || 'NUMBER' };
+      if (value !== undefined && p.type !== 'MIN' && p.type !== 'MAX') p.value = String(value);
+      return p;
+    };
+    const rule = { minpoint: point(g.minColor, g.minType || 'MIN', g.minValue),
+                   maxpoint: point(g.maxColor, g.maxType || 'MAX', g.maxValue) };
+    if (!rule.minpoint || !rule.maxpoint) return null;
+    if (g.midColor) rule.midpoint = point(g.midColor, g.midType || 'PERCENTILE', g.midValue !== undefined ? g.midValue : 50);
+    return { ranges: [gridRange], gradientRule: rule };
+  }
+  if (!spec || !spec.when) return null;
+  const format = {};
+  if (spec.background) format.backgroundColor = hexColor_(spec.background);
+  if (spec.fontColor || spec.bold !== undefined || spec.italic !== undefined) {
+    format.textFormat = {};
+    if (spec.fontColor) format.textFormat.foregroundColor = hexColor_(spec.fontColor);
+    if (spec.bold !== undefined) format.textFormat.bold = Boolean(spec.bold);
+    if (spec.italic !== undefined) format.textFormat.italic = Boolean(spec.italic);
+  }
+  return {
+    ranges: [gridRange],
+    booleanRule: {
+      condition: {
+        type: String(spec.when),
+        values: (spec.values || []).map(function (v) { return { userEnteredValue: String(v) }; }),
+      },
+      format: format,
+    },
+  };
+}
+
+/** The named range with this name, or null. */
+function namedRange_(ss, name) {
+  return ss.getNamedRanges().filter(function (nr) { return nr.getName() === name; })[0] || null;
+}
 
 /** "B" or 2 → 2. Sort specs arrive with whatever the model found natural. */
 function colNum_(v) {
@@ -189,6 +294,9 @@ function inspectOp_(ss, op) {
 function structTarget_(op, sheetName) {
   if (op.type === 'addSheet') return "sheet '" + op.name + "'";
   if (op.type === 'deleteSheet') return "sheet '" + sheetName + "'";
+  if (op.type === 'duplicateSheet') {
+    return "sheet '" + sheetName + "' → copy" + (op.newName ? " '" + op.newName + "'" : '');
+  }
   const count = Math.max(1, op.count || 1);
   const unit = /Rows$/.test(op.type) ? 'rows' : 'cols';
   const span = count > 1 ? op.index + '-' + (op.index + count - 1) : String(op.index);
@@ -228,6 +336,16 @@ function inspectStructural_(ss, op, base) {
       error: { code: 'SHEET_NOT_FOUND', message: 'No sheet named ' + op.sheetName } };
   }
   base.target = structTarget_(op, sheet.getName());
+
+  if (op.type === 'duplicateSheet') {
+    if (op.newName && ss.getSheetByName(op.newName)) {
+      return { ok: false, type: op.type,
+        error: { code: 'SHEET_EXISTS', message: "A sheet named '" + op.newName + "' already exists." } };
+    }
+    base.destructive = false;
+    base.reason = '';
+    return base;
+  }
 
   if (op.type === 'insertRows' || op.type === 'insertColumns') {
     if (!op.index || op.index < 1) {
@@ -351,6 +469,52 @@ function inspectRangeOp_(ss, op, base) {
     return base;
   }
 
+  // Borders, notes, and validations destroy no content — the snapshot captures
+  // and restores all three — so none of them gates. Validation only.
+  if (op.type === 'setBorders') {
+    if (op.style !== undefined && BORDER_STYLES.indexOf(op.style) === -1) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: "style must be one of: " + BORDER_STYLES.join(', ') } };
+    }
+    const edges = ['top', 'bottom', 'left', 'right', 'vertical', 'horizontal'];
+    if (!edges.some(function (e) { return op[e] !== undefined; })) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'Pass at least one edge: ' + edges.join(', ') + '.' } };
+    }
+    return base;
+  }
+
+  if (op.type === 'setNote') {
+    if (op.note !== undefined && op.note !== null && typeof op.note !== 'string') {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'note must be a string (empty clears it).' } };
+    }
+    return base;
+  }
+
+  if (op.type === 'setValidation') {
+    const rule = op.rule || {};
+    const kinds = ['list', 'numberBetween', 'numberGreaterThan', 'checkbox', 'date', 'none'];
+    if (kinds.indexOf(rule.type) === -1) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'rule.type must be one of: ' + kinds.join(', ') } };
+    }
+    if (rule.type === 'list' && (!Array.isArray(rule.values) || !rule.values.length)) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'a list rule needs values: ["a", "b", …].' } };
+    }
+    if (rule.type === 'numberBetween' &&
+        (typeof rule.min !== 'number' || typeof rule.max !== 'number')) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'numberBetween needs numeric min and max.' } };
+    }
+    if (rule.type === 'numberGreaterThan' && typeof rule.min !== 'number') {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'numberGreaterThan needs a numeric min.' } };
+    }
+    return base;
+  }
+
   // sortRange
   const by = op.by;
   if (!Array.isArray(by) || !by.length) {
@@ -382,8 +546,41 @@ function inspectRangeOp_(ss, op, base) {
  * state — so this is validation only.
  */
 function inspectLayout_(ss, op, base) {
-  if (op.type !== 'renameSheet' && op.type !== 'hideSheet' && op.type !== 'showSheet' &&
-      op.type !== 'freezePanes') {
+  base.destructive = false;
+  base.reason = '';
+
+  // Named ranges are spreadsheet-scoped; resolve them before any sheet lookup.
+  if (op.type === 'setNamedRange' || op.type === 'deleteNamedRange') {
+    if (!op.name || typeof op.name !== 'string' ||
+        !/^[A-Za-z_][A-Za-z0-9_.]{0,254}$/.test(op.name)) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'Named range names are letters, digits, and _ ' +
+          '(no spaces), not starting with a digit.' } };
+    }
+    if (op.type === 'deleteNamedRange') {
+      if (!namedRange_(ss, op.name)) {
+        return { ok: false, type: op.type,
+          error: { code: 'BAD_PAYLOAD', message: "No named range called '" + op.name + "'." } };
+      }
+      base.target = "named range '" + op.name + "'";
+      return base;
+    }
+    const target = opSheet_(ss, op);
+    if (!target) {
+      return { ok: false, type: op.type,
+        error: { code: 'SHEET_NOT_FOUND', message: 'No sheet named ' + op.sheetName } };
+    }
+    try { target.getRange(op.a1); } catch (e) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'Bad range "' + op.a1 + '": ' + e.message } };
+    }
+    base.target = "named range '" + op.name + "' → " + target.getName() + '!' + op.a1;
+    return base;
+  }
+
+  const SHEET_SCOPED = ['renameSheet', 'hideSheet', 'showSheet', 'freezePanes',
+                        'setConditionalFormat', 'clearConditionalFormats'];
+  if (SHEET_SCOPED.indexOf(op.type) === -1) {
     if (!op.index || op.index < 1) {
       return { ok: false, type: op.type,
         error: { code: 'BAD_PAYLOAD', message: 'index must be 1 or greater.' } };
@@ -435,6 +632,24 @@ function inspectLayout_(ss, op, base) {
     base.target = "sheet '" + name + "'";
   } else if (op.type === 'showSheet') {
     base.target = "sheet '" + name + "'";
+  } else if (op.type === 'setConditionalFormat') {
+    if (!op.a1) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'setConditionalFormat needs an a1 range.' } };
+    }
+    let range;
+    try { range = sheet.getRange(op.a1); } catch (e) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'Bad range "' + op.a1 + '": ' + e.message } };
+    }
+    if (!condRuleFromSpec_(sheet, range, op.rule)) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'rule needs {when, values?, background?, ' +
+          'fontColor?, bold?} or {gradient: {minColor, maxColor, …}}.' } };
+    }
+    base.target = name + '!' + range.getA1Notation() + ' rule';
+  } else if (op.type === 'clearConditionalFormats') {
+    base.target = name + ' conditional formats';
   } else {  // hideRows / showRows / hideColumns / showColumns
     base.target = name + '!' + (/Rows$/.test(op.type) ? 'rows ' : 'cols ') + span;
   }
@@ -541,6 +756,15 @@ function applyStructural_(ss, op, turnId) {
     sheetName = op.name;
     target = structTarget_(op, op.name);
     inverse = { type: 'deleteSheet', name: op.name };
+  } else if (op.type === 'duplicateSheet') {
+    const source = opSheet_(ss, op);
+    const copy = source.copyTo(ss);
+    if (op.newName) copy.setName(op.newName);
+    sheetName = copy.getName();
+    target = structTarget_(op, source.getName());
+    // Undoing a duplicate deletes the copy — nothing else changed, and the
+    // source needs no snapshot.
+    inverse = { type: 'deleteSheet', name: sheetName };
   } else {
     const sheet = opSheet_(ss, op);
     sheetName = sheet.getName();
@@ -614,11 +838,44 @@ function applyRangeOp_(ss, op, turnId) {
     else range.merge();
     extra = { sheetName: sheet.getName(),
               inverse: { type: 'unmergeRestore', priorMerges: prior } };
-  } else {  // unmergeCells — values survive an unmerge, so no snapshot needed
+  } else if (op.type === 'unmergeCells') {
+    // Values survive an unmerge, so no snapshot needed.
     const prior = range.getMergedRanges().map(function (r) { return r.getA1Notation(); });
     range.breakApart();
     extra = { sheetName: sheet.getName(), a1: range.getA1Notation(),
               inverse: { type: 'remerge', ranges: prior } };
+  } else if (op.type === 'setBorders') {
+    // The snapshot carries the prior borders (borderGrid_), so undo is the
+    // plain restore path — same as a value write.
+    snapshot = snapshotRange_(sheet, range);
+    const b = function (edge) { return op[edge] === undefined ? null : Boolean(op[edge]); };
+    if (op.style === 'none') {
+      range.setBorder(b('top'), b('left'), b('bottom'), b('right'),
+                      b('vertical'), b('horizontal'), null, null);
+    } else {
+      range.setBorder(b('top'), b('left'), b('bottom'), b('right'),
+                      b('vertical'), b('horizontal'),
+                      op.color || '#000000', borderStyleEnum_(op.style));
+    }
+  } else if (op.type === 'setNote') {
+    snapshot = snapshotRange_(sheet, range);
+    range.setNote(op.note ? String(op.note) : null);
+  } else {  // setValidation — the snapshot's validations grid is the undo
+    snapshot = snapshotRange_(sheet, range);
+    const rule = op.rule || {};
+    if (rule.type === 'none') {
+      range.clearDataValidations();
+    } else {
+      let builder = SpreadsheetApp.newDataValidation();
+      if (rule.type === 'list') builder = builder.requireValueInList(rule.values.map(String), true);
+      else if (rule.type === 'numberBetween') builder = builder.requireNumberBetween(rule.min, rule.max);
+      else if (rule.type === 'numberGreaterThan') builder = builder.requireNumberGreaterThan(rule.min);
+      else if (rule.type === 'checkbox') builder = builder.requireCheckbox();
+      else builder = builder.requireDate();
+      builder = builder.setAllowInvalid(rule.allowInvalid !== false);
+      if (rule.help) builder = builder.setHelpText(String(rule.help));
+      range.setDataValidation(builder.build());
+    }
   }
 
   SpreadsheetApp.flush();
@@ -692,6 +949,44 @@ function applyLayout_(ss, op, turnId) {
     if (op.type === 'hideSheet') sheet.hideSheet(); else sheet.showSheet();
     target = "sheet '" + entrySheetName + "'";
     layout = { kind: 'sheetvis' };
+  } else if (op.type === 'setConditionalFormat' || op.type === 'clearConditionalFormats') {
+    // Rules are whole-sheet state through the API, so the inverse is the
+    // sheet's prior rule list, stored as the API's own JSON and restored
+    // verbatim. SpreadsheetApp cannot read a rule's format back; the Advanced
+    // Sheets service round-trips it untouched.
+    const prior = condRules_(ss, sheet);
+    if (op.type === 'setConditionalFormat') {
+      const range = sheet.getRange(op.a1);
+      const rule = condRuleFromSpec_(sheet, range, op.rule);
+      setCondRules_(ss, sheet, prior.concat([rule]));
+      target = entrySheetName + '!' + range.getA1Notation() + ' rule';
+    } else {
+      setCondRules_(ss, sheet, []);
+      target = entrySheetName + ' conditional formats (' + prior.length + ' rule' +
+        (prior.length === 1 ? '' : 's') + ' removed)';
+    }
+    inverse = { type: 'layout', kind: 'condfmt', rules: prior };
+    layout = { kind: 'condfmt' };
+  } else if (op.type === 'setNamedRange' || op.type === 'deleteNamedRange') {
+    const existing = namedRange_(ss, op.name);
+    const priorA1 = existing
+      ? { sheetName: existing.getRange().getSheet().getName(),
+          a1: existing.getRange().getA1Notation() }
+      : null;
+    if (op.type === 'setNamedRange') {
+      const targetSheet = opSheet_(ss, op);
+      ss.setNamedRange(op.name, targetSheet.getRange(op.a1));
+      entrySheetName = targetSheet.getName();
+      target = "named range '" + op.name + "' → " + entrySheetName + '!' + op.a1;
+    } else {
+      existing.remove();
+      entrySheetName = priorA1.sheetName;
+      target = "named range '" + op.name + "'";
+    }
+    // key scopes the conflict: edits to DIFFERENT named ranges never block
+    // each other's undo; edits to the same one do.
+    inverse = { type: 'layout', kind: 'namedrange', name: op.name, prior: priorA1 };
+    layout = { kind: 'namedrange', key: op.name };
   } else {  // hideRows / showRows / hideColumns / showColumns
     const rows = /Rows$/.test(op.type);
     const spans = [];

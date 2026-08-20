@@ -364,6 +364,123 @@ const TOOLS = [
       required: ['sheetName'],
     },
   },
+  {
+    name: 'set_borders',
+    description: 'Draw or remove borders on a range. Pass true for each edge to '
+      + 'draw: top, bottom, left, right, vertical (inner columns), horizontal '
+      + '(inner rows); false removes that edge. style is "solid" (default), '
+      + '"dashed", "dotted", "thick", "double", or "none" (remove); color is '
+      + '"#rrggbb". Undoable. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        a1: { type: 'string' },
+        top: { type: 'boolean' }, bottom: { type: 'boolean' },
+        left: { type: 'boolean' }, right: { type: 'boolean' },
+        vertical: { type: 'boolean' }, horizontal: { type: 'boolean' },
+        color: { type: 'string' },
+        style: { type: 'string', enum: ['solid', 'dashed', 'dotted', 'thick', 'double', 'none'] },
+      },
+      required: ['sheetName', 'a1'],
+    },
+  },
+  {
+    name: 'set_validation',
+    description: 'Set data validation on a range — a dropdown, number bound, '
+      + 'checkbox, or date requirement. rule is {type: "list", values: [...]} | '
+      + '{type: "numberBetween", min, max} | {type: "numberGreaterThan", min} | '
+      + '{type: "checkbox"} | {type: "date"} | {type: "none"} (removes it). '
+      + 'Optional: allowInvalid (false rejects bad input outright), help. '
+      + 'Undoable. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        a1: { type: 'string' },
+        rule: { type: 'object' },
+      },
+      required: ['sheetName', 'a1', 'rule'],
+    },
+  },
+  {
+    name: 'set_conditional_format',
+    description: 'Add one conditional-format rule to a range. rule is {when, '
+      + 'values?, background?, fontColor?, bold?, italic?} — when is a Sheets '
+      + 'API condition like NUMBER_GREATER, NUMBER_LESS, NUMBER_BETWEEN, '
+      + 'TEXT_CONTAINS, TEXT_EQ, DATE_BEFORE, BLANK, NOT_BLANK, or '
+      + 'CUSTOM_FORMULA (values: ["=A1>10"]). Or a color scale: {gradient: '
+      + '{minColor, maxColor, midColor?}}. Undoable. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        a1: { type: 'string' },
+        rule: { type: 'object' },
+      },
+      required: ['sheetName', 'a1', 'rule'],
+    },
+  },
+  {
+    name: 'clear_conditional_formats',
+    description: 'Remove ALL conditional-format rules from a tab. Undoable — '
+      + 'the full rule list is restored on undo. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: { sheetName: { type: 'string' } },
+      required: ['sheetName'],
+    },
+  },
+  {
+    name: 'set_note',
+    description: 'Set the note on a cell or range (an empty note removes it). '
+      + 'Undoable. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        a1: { type: 'string' },
+        note: { type: 'string' },
+      },
+      required: ['sheetName', 'a1'],
+    },
+  },
+  {
+    name: 'set_named_range',
+    description: 'Create or redefine a named range, usable in formulas '
+      + '(=SUM(Sales)). Names are letters, digits, and _, not starting with a '
+      + 'digit. Undoable. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        sheetName: { type: 'string' },
+        a1: { type: 'string' },
+      },
+      required: ['name', 'sheetName', 'a1'],
+    },
+  },
+  {
+    name: 'delete_named_range',
+    description: 'Delete a named range by name. The cells are untouched — only '
+      + 'the name goes. Undoable. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'duplicate_sheet',
+    description: 'Copy a whole tab, contents and formatting, to a new tab. '
+      + 'newName defaults to "Copy of <name>". Undoable (deletes the copy). '
+      + 'Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: { sheetName: { type: 'string' }, newName: { type: 'string' } },
+      required: ['sheetName'],
+    },
+  },
 ];
 
 /**

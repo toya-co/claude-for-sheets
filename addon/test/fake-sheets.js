@@ -121,6 +121,44 @@ class FakeRange {
   setVerticalAlignments(g) { this._write('verticalAlignments', g); return this; }
   setFontLines(g) { this._write('fontLines', g); return this; }
 
+  getNotes() { return this._read('notes'); }
+  setNotes(g) { this._write('notes', g); return this; }
+  setNote(v) { this._fill('notes', v === null || v === undefined ? '' : v); return this; }
+  getSheet() { return this.sheet; }
+
+  getDataValidations() {
+    return this._read('validations').map((row) => row.map((v) => (v === '' ? null : v)));
+  }
+  setDataValidations(g) { this._write('validations', g); return this; }
+  setDataValidation(v) { this._fill('validations', v); return this; }
+  clearDataValidations() { this._fill('validations', null); return this; }
+
+  /**
+   * Range.setBorder, API-shaped into the borders layer. Each cell carries
+   * {top?, bottom?, left?, right?} of {style, color} — the same object shape
+   * the fake Sheets service serves back, so snapshot/restore is passthrough.
+   * true sets the edge, false removes it, null leaves it alone.
+   */
+  setBorder(top, left, bottom, right, vertical, horizontal, color, style) {
+    const value = { style: style || 'SOLID', color: color || '#000000' };
+    for (let r = 0; r < this.rows; r++) {
+      for (let c = 0; c < this.cols; c++) {
+        const cell = Object.assign({}, this.sheet._get('borders', this.row + r, this.col + c) || {});
+        const apply = (edge, want) => {
+          if (want === true) cell[edge] = value;
+          else if (want === false) delete cell[edge];
+        };
+        apply('top', r === 0 ? top : (r > 0 ? horizontal : null));
+        apply('bottom', r === this.rows - 1 ? bottom : (r < this.rows - 1 ? horizontal : null));
+        apply('left', c === 0 ? left : (c > 0 ? vertical : null));
+        apply('right', c === this.cols - 1 ? right : (c < this.cols - 1 ? vertical : null));
+        this.sheet._set('borders', this.row + r, this.col + c,
+          Object.keys(cell).length ? cell : '');
+      }
+    }
+    return this;
+  }
+
   setBackground(v) { this._fill('backgrounds', v); return this; }
   setFontColor(v) { this._fill('fontColors', v); return this; }
   setFontWeight(v) { this._fill('fontWeights', v); return this; }
@@ -135,8 +173,11 @@ class FakeRange {
 
   clearContent() { this._fill('values', ''); this._fill('formulas', ''); return this; }
   clearFormat() {
+    // Borders are formatting and go with the rest; notes and validations are
+    // not — the real clear()/clearFormat leaves both in place.
     ['backgrounds', 'fontWeights', 'fontColors', 'numberFormats', 'horizontalAlignments',
-     'fontStyles', 'fontSizes', 'fontFamilies', 'wraps', 'verticalAlignments', 'fontLines']
+     'fontStyles', 'fontSizes', 'fontFamilies', 'wraps', 'verticalAlignments', 'fontLines',
+     'borders']
       .forEach((l) => this._fill(l, ''));
     return this;
   }
@@ -207,8 +248,33 @@ const LAYER_DEFAULTS = {
   values: '', formulas: '', backgrounds: '#ffffff', fontWeights: 'normal',
   fontColors: '#000000', numberFormats: '', horizontalAlignments: '', fontStyles: 'normal',
   fontSizes: 10, fontFamilies: 'Arial', wraps: false, verticalAlignments: 'bottom',
-  fontLines: 'none',
+  fontLines: 'none', notes: '', borders: null, validations: null,
 };
+
+/** A stored data-validation rule; the getters mirror the real DataValidation. */
+class FakeDataValidation {
+  constructor(criteria, args, allowInvalid, help) {
+    Object.assign(this, { criteria, args, allowInvalid, help });
+  }
+  getCriteriaType() { return this.criteria; }   // a string doubling as the enum
+  getCriteriaValues() { return this.args; }
+  getAllowInvalid() { return this.allowInvalid; }
+  getHelpText() { return this.help || ''; }
+  copy() { return this; }
+}
+
+class FakeValidationBuilder {
+  constructor() { this.criteria = null; this.args = []; this.allowInvalid = true; this.help = null; }
+  requireValueInList(values, show) { this.criteria = 'VALUE_IN_LIST'; this.args = [values, show !== false]; return this; }
+  requireNumberBetween(min, max) { this.criteria = 'NUMBER_BETWEEN'; this.args = [min, max]; return this; }
+  requireNumberGreaterThan(min) { this.criteria = 'NUMBER_GREATER_THAN'; this.args = [min]; return this; }
+  requireCheckbox() { this.criteria = 'CHECKBOX'; this.args = []; return this; }
+  requireDate() { this.criteria = 'DATE_IS_VALID_DATE'; this.args = []; return this; }
+  withCriteria(criteria, args) { this.criteria = criteria; this.args = args || []; return this; }
+  setAllowInvalid(v) { this.allowInvalid = Boolean(v); return this; }
+  setHelpText(t) { this.help = t; return this; }
+  build() { return new FakeDataValidation(this.criteria, this.args, this.allowInvalid, this.help); }
+}
 
 class FakeSheet {
   constructor(name, sheetId) {
@@ -223,7 +289,18 @@ class FakeSheet {
     this.frozenCols = 0;
     this.hiddenRows = new Set();
     this.hiddenCols = new Set();
+    this.conditionalFormats = [];      // API-shaped rule objects, in order
     Object.keys(LAYER_DEFAULTS).forEach((l) => { this.layers[l] = new Map(); });
+  }
+
+  copyTo(ss) {
+    const copy = ss.insertSheet('Copy of ' + this.name);
+    for (const l of Object.keys(this.layers)) copy.layers[l] = new Map(this.layers[l]);
+    copy.merges = this.merges.map((m) => ({ ...m }));
+    copy.columnWidths = new Map(this.columnWidths);
+    copy.rowHeights = new Map(this.rowHeights);
+    copy.conditionalFormats = this.conditionalFormats.map((r) => JSON.parse(JSON.stringify(r)));
+    return copy;
   }
 
   /**
@@ -357,6 +434,29 @@ class FakeSpreadsheet {
     this._nextId = 0;
     this.sheets = names.map((n) => this._make(n));
     this.id = 'fake-spreadsheet-id';
+    this.namedRanges = new Map();      // name -> {sheetName, a1}
+  }
+
+  /** "'Sheet Name'!A1:B2" or "Sheet1!A1" — the qualified form the API uses. */
+  getRange(qualified) {
+    const m = /^(?:'((?:[^']|'')*)'|([^'!]+))!(.+)$/.exec(String(qualified));
+    if (!m) throw new Error('Bad qualified range: ' + qualified);
+    const sheetName = m[1] !== undefined ? m[1].replace(/''/g, "'") : m[2];
+    const sheet = this.getSheetByName(sheetName);
+    if (!sheet) throw new Error('No sheet: ' + sheetName);
+    return sheet.getRange(m[3]);
+  }
+
+  getNamedRanges() {
+    const ss = this;
+    return [...this.namedRanges.entries()].map(([name, def]) => ({
+      getName: () => name,
+      getRange: () => ss.getSheetByName(def.sheetName).getRange(def.a1),
+      remove: () => { ss.namedRanges.delete(name); },
+    }));
+  }
+  setNamedRange(name, range) {
+    this.namedRanges.set(name, { sheetName: range.sheet.getName(), a1: range.getA1Notation() });
   }
   _make(name) {
     const s = new FakeSheet(name, this._nextId++);
@@ -396,6 +496,8 @@ function loadAddon(sheetNames = ['Sheet1', 'Sheet2']) {
   const ss = new FakeSpreadsheet(sheetNames);
   const properties = new Map();
 
+  const byId = (sheetId) => ss.sheets.filter((s) => s.getSheetId() === sheetId)[0];
+
   const sandbox = {
     SpreadsheetApp: {
       getActiveSpreadsheet: () => ss,
@@ -404,6 +506,68 @@ function loadAddon(sheetNames = ['Sheet1', 'Sheet2']) {
         return ss;
       },
       flush: () => {},
+      newDataValidation: () => new FakeValidationBuilder(),
+      // Identity maps: the code passes these enums straight through, and the
+      // fake stores the name itself, so name -> name is exactly faithful.
+      DataValidationCriteria: new Proxy({}, { get: (t, k) => String(k) }),
+      BorderStyle: new Proxy({}, { get: (t, k) => String(k) }),
+    },
+
+    /**
+     * The Advanced Sheets service, for exactly the two things SpreadsheetApp
+     * cannot do: read borders back, and round-trip conditional-format rules
+     * with their formats attached. Serves API-shaped JSON from the fake's own
+     * state so the .gs code's parsing is exercised for real.
+     */
+    Sheets: {
+      Spreadsheets: {
+        get: (id, params) => {
+          if (/conditionalFormats/.test(params.fields || '')) {
+            return { sheets: ss.sheets.map((s) => ({
+              properties: { sheetId: s.getSheetId() },
+              conditionalFormats: s.conditionalFormats.map((r) => JSON.parse(JSON.stringify(r))),
+            })) };
+          }
+          const range = ss.getRange(params.ranges[0]);
+          const rowData = [];
+          for (let r = 0; r < range.getNumRows(); r++) {
+            const values = [];
+            for (let c = 0; c < range.getNumColumns(); c++) {
+              const b = range.sheet._get('borders', range.row + r, range.col + c);
+              values.push(b ? { userEnteredFormat: { borders: JSON.parse(JSON.stringify(b)) } } : {});
+            }
+            rowData.push({ values });
+          }
+          return { sheets: [{ data: [{ rowData }] }] };
+        },
+        batchUpdate: (body, id) => {
+          for (const req of body.requests || []) {
+            if (req.updateCells) {
+              const u = req.updateCells;
+              if (u.fields !== 'userEnteredFormat.borders') {
+                throw new Error('fake batchUpdate only understands border updates, got: ' + u.fields);
+              }
+              const sheet = byId(u.range.sheetId);
+              (u.rows || []).forEach((row, r) => {
+                (row.values || []).forEach((cell, c) => {
+                  const b = (cell.userEnteredFormat || {}).borders || {};
+                  sheet._set('borders', u.range.startRowIndex + 1 + r,
+                    u.range.startColumnIndex + 1 + c, Object.keys(b).length ? b : '');
+                });
+              });
+            } else if (req.deleteConditionalFormatRule) {
+              byId(req.deleteConditionalFormatRule.sheetId)
+                .conditionalFormats.splice(req.deleteConditionalFormatRule.index, 1);
+            } else if (req.addConditionalFormatRule) {
+              const a = req.addConditionalFormatRule;
+              const sheetId = a.rule.ranges[0].sheetId;
+              byId(sheetId).conditionalFormats.splice(a.index, 0, a.rule);
+            } else {
+              throw new Error('fake batchUpdate: unknown request ' + Object.keys(req));
+            }
+          }
+        },
+      },
     },
     PropertiesService: {
       getDocumentProperties: () => ({

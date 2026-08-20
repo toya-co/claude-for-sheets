@@ -147,6 +147,9 @@ rectangle — so they share the rectangle-overlap conflict rule for undo.
 | `mergeCells` | `{a1, mergeType: "all" \| "across" \| "vertical"}` | Asks when merging would destroy any content: only the first cell of each merged block survives, like `clear`, it leaves nothing behind to notice |
 | `unmergeCells` | `{a1}` | Never — no values are lost |
 | `sortRange` | `{a1, by: [{column, ascending}]}` | Asks when the range holds formulas — sorting rearranges their relative references, which can silently change results |
+| `setBorders` | `{a1, top?, bottom?, left?, right?, vertical?, horizontal?, color?, style?}` | Never — borders are formatting, and the snapshot restores the prior ones |
+| `setValidation` | `{a1, rule: {type: "list"\|"numberBetween"\|"numberGreaterThan"\|"checkbox"\|"date"\|"none", …}}` | Never — the snapshot restores the prior rule |
+| `setNote` | `{a1, note}` (empty removes) | Never — the snapshot restores the prior note |
 
 `sortRange` columns are absolute sheet columns (letter or 1-based number) and
 must fall inside the range. Sorting is a permutation — nothing is destroyed —
@@ -170,6 +173,10 @@ restores cleanly.
 | `hideRows` / `showRows` | `{index, count}` | prior per-row hidden state |
 | `hideColumns` / `showColumns` | `{index, count}` | prior per-column hidden state |
 | `hideSheet` / `showSheet` | — | prior visibility |
+| `setConditionalFormat` | `{a1, rule}` | the sheet's prior rule list |
+| `clearConditionalFormats` | — | the sheet's prior rule list |
+| `setNamedRange` | `{name, a1}` | the name's prior definition (or absence) |
+| `deleteNamedRange` | `{name}` | the deleted definition |
 
 **`renameSheet` rewrites the history index** — every entry on the renamed sheet
 follows it to the new name, and undoing the rename rewrites them back. Without
@@ -177,6 +184,13 @@ that, a rename orphans the entire history: every older entry points at a name
 that no longer resolves, and every undo on that sheet fails. Snapshot payloads
 are not rewritten (that would be a full history rewrite); restore uses the
 index entry's current name and treats the payload's stored name as a fallback.
+
+**Conditional formats and named ranges ride the layout plane.** Rules are
+whole-sheet state (their inverse is the sheet's prior rule list, as the Sheets
+API's own JSON — SpreadsheetApp can write a rule but cannot read its format
+back, so both directions go through the Advanced Sheets service). Named-range
+entries carry a `key` (the name), so edits to *different* named ranges never
+block each other's undo.
 
 **Layout entries conflict on their own plane.** They never disturb cell
 content, so a width change does not block a value undo or vice versa. A layout
@@ -293,16 +307,22 @@ Oversized payloads fail the same silent way, so context reads are capped at
 
 ## Status
 
-Implemented: `getContext`, `inspectOps`, `applyOps`, `undoOp`, `getHistory`, and
-`applyOp` as a one-op convenience over `applyOps`. All four value ops, all six
-structural ops, all three range ops, and all ten layout ops work, with the
-gate, the guard, and inverse-op undo. The hidden history sheet is protected
-from every op type (`PROTECTED_SHEET`). Context reads report merged blocks.
+Implemented: `getContext`, `inspectOps`, `applyOps`, `undoOp`, `getHistory`,
+and `applyOp` as a one-op convenience over `applyOps`. Four value ops, seven
+structural ops (including `duplicateSheet`), six range ops, and fourteen
+layout ops, with the gate, the guard, and inverse-op undo. The hidden history
+sheet is protected from every op type (`PROTECTED_SHEET`). Context reads
+report merged blocks.
+
+**Snapshots also capture notes, data validations, and borders** — borders via
+the Advanced Sheets service (SpreadsheetApp can write but not read them), so
+undoing a format clear brings borders back too. A snapshot degrades gracefully
+if the service errors: the entry records without borders rather than failing
+the write.
 
 Not yet ops at all (the model's prompt says so, so it declines honestly):
-borders (Apps Script can write but not *read* them, so honest undo needs the
-Advanced Sheets API — Tier 2), conditional formatting, data validation, notes,
-named ranges, charts, pivot tables, protected ranges.
+charts, pivot tables, protected ranges, filters, comments (notes are not
+comments).
 
 Mid-turn conflict detection is live: range hash plus the `onEdit` watermark,
 carried on every write and refreshed after each.

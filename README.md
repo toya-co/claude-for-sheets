@@ -29,8 +29,9 @@ like Claude in Chrome, wrapped in your sidebar. Turns continue each other,
 every change is its own undo entry, and anything destructive asks first. It can
 also search the web and fetch pages — each request stops at an Allow/Skip card
 showing the full URL, and local/private addresses are refused automatically.
-Not yet: borders, conditional formatting, data validation, notes, charts — it
-will say so rather than improvise.
+Borders, dropdowns, conditional formatting, notes, and named ranges included.
+Not yet: charts, pivot tables, protected ranges — it will say so rather than
+improvise.
 
 | Milestone | State |
 |---|---|
@@ -47,7 +48,8 @@ will say so rather than improvise.
 | M9 mid-turn edit detection | ✅ your typing aborts Claude's write, never the reverse |
 | M8.5 capability parity tier 1 | ✅ merge, sort, resize, freeze, hide, rename — all undoable |
 | M5.5 web search and fetch, behind the gate | ✅ every request is an Allow/Skip card; local addresses auto-refused |
-| Tier 2 capabilities (borders, validation, notes, …) | next |
+| Tier 2: borders, dropdowns, conditional formats, notes, named ranges | ✅ all undoable, borders via the Sheets API |
+| M10 dashboard | next |
 
 Full plan in [`ARCHITECTURE.md`](ARCHITECTURE.md). The platform verification
 behind it is in [`PLAN.md`](PLAN.md).

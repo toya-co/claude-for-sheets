@@ -43,13 +43,136 @@ function writeIndex_(index) {
 }
 
 /**
+ * A1 range for the Sheets API, sheet name quoted the way the API wants it.
+ */
+function apiRange_(sheetName, a1) {
+  return "'" + String(sheetName).replace(/'/g, "''") + "'!" + a1;
+}
+
+/**
+ * Per-cell border grid via the Advanced Sheets service — SpreadsheetApp can
+ * WRITE borders but cannot read them, so without this call a border is
+ * invisible to the snapshot and an undo silently erases it. Returns null when
+ * the service is unavailable or errors; the snapshot then simply omits borders
+ * rather than failing the write.
+ *
+ * The grid holds the API's own `borders` objects untouched — captured from
+ * `userEnteredFormat.borders`, restored into the same field — so nothing here
+ * ever needs to understand a border's insides.
+ */
+function borderGrid_(ss, sheetName, a1, rows, cols) {
+  try {
+    const resp = Sheets.Spreadsheets.get(ss.getId(), {
+      ranges: [apiRange_(sheetName, a1)],
+      fields: 'sheets(data(rowData(values(userEnteredFormat/borders))))',
+    });
+    const rowData = (((resp.sheets || [])[0] || {}).data || [])[0] || {};
+    const grid = [];
+    for (let r = 0; r < rows; r++) {
+      const line = [];
+      const vals = ((rowData.rowData || [])[r] || {}).values || [];
+      for (let c = 0; c < cols; c++) {
+        line.push(((vals[c] || {}).userEnteredFormat || {}).borders || null);
+      }
+      grid.push(line);
+    }
+    return grid;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Write a captured border grid back, per cell. `fields` scopes the update to
+ * borders alone, and a null cell clears them — restoring "no border" is as
+ * much a part of the undo as restoring one.
+ */
+function restoreBorders_(ss, sheet, a1, grid) {
+  const anchor = sheet.getRange(a1);
+  const rows = grid.map(function (line) {
+    return { values: line.map(function (b) {
+      return { userEnteredFormat: { borders: b || {} } };
+    }) };
+  });
+  Sheets.Spreadsheets.batchUpdate({
+    requests: [{
+      updateCells: {
+        range: {
+          sheetId: sheet.getSheetId(),
+          startRowIndex: anchor.getRow() - 1,
+          endRowIndex: anchor.getRow() - 1 + grid.length,
+          startColumnIndex: anchor.getColumn() - 1,
+          endColumnIndex: anchor.getColumn() - 1 + (grid[0] ? grid[0].length : 0),
+        },
+        rows: rows,
+        fields: 'userEnteredFormat.borders',
+      },
+    }],
+  }, ss.getId());
+}
+
+/**
+ * Serialize a range's data validations to JSON and back. Criteria values may
+ * contain live Range and Date objects, neither of which survives JSON — they
+ * are tagged and rebuilt.
+ */
+function serializeValidations_(range) {
+  const grid = range.getDataValidations();
+  let any = false;
+  const out = grid.map(function (row) {
+    return row.map(function (dv) {
+      if (!dv) return null;
+      any = true;
+      return {
+        criteria: String(dv.getCriteriaType()),
+        args: dv.getCriteriaValues().map(function (v) {
+          if (v && typeof v.getA1Notation === 'function') {
+            return { __r: apiRange_(v.getSheet().getName(), v.getA1Notation()) };
+          }
+          if (v instanceof Date) return { __d: v.toISOString() };
+          return v;
+        }),
+        allowInvalid: dv.getAllowInvalid(),
+        help: dv.getHelpText() || null,
+      };
+    });
+  });
+  return any ? out : null;   // the overwhelmingly common case stays payload-free
+}
+
+function applyValidations_(ss, range, grid) {
+  range.setDataValidations(grid.map(function (row) {
+    return row.map(function (spec) {
+      if (!spec) return null;
+      const criteria = SpreadsheetApp.DataValidationCriteria[spec.criteria];
+      if (!criteria) return null;   // an enum this runtime no longer knows
+      const args = spec.args.map(function (v) {
+        if (v && v.__r) return ss.getRange(v.__r);
+        if (v && v.__d) return new Date(v.__d);
+        return v;
+      });
+      const builder = SpreadsheetApp.newDataValidation()
+        .withCriteria(criteria, args)
+        .setAllowInvalid(spec.allowInvalid !== false);
+      if (spec.help) builder.setHelpText(spec.help);
+      return builder.build();
+    });
+  }));
+}
+
+/**
  * Capture values, formulas AND formats. Restoring values alone leaves the sheet
  * visibly wrong — that is the specific gap in the competing product's undo.
  */
 function snapshotRange_(sheet, range) {
+  const ss = writeSpreadsheet_();
   return {
     sheetName: sheet.getName(),
     a1: range.getA1Notation(),
+    notes: range.getNotes(),
+    validations: serializeValidations_(range),
+    borders: borderGrid_(ss, sheet.getName(), range.getA1Notation(),
+                         range.getNumRows(), range.getNumColumns()),
     values: sanitizeGrid_(range.getValues()),
     formulas: range.getFormulas(),
     backgrounds: range.getBackgrounds(),
@@ -98,6 +221,12 @@ function restoreSnapshot_(snap, sheetName) {
   if (snap.wraps) range.setWraps(snap.wraps);
   if (snap.verticalAlignments) range.setVerticalAlignments(snap.verticalAlignments);
   if (snap.fontLines) range.setFontLines(snap.fontLines);
+  if (snap.notes) range.setNotes(snap.notes);
+  if (snap.validations) applyValidations_(writeSpreadsheet_(), range, snap.validations);
+  if (snap.borders) {
+    try { restoreBorders_(writeSpreadsheet_(), sheet, snap.a1, snap.borders); }
+    catch (e) { /* the rest of the restore already landed; borders degrade */ }
+  }
   SpreadsheetApp.flush();
 }
 
@@ -198,6 +327,11 @@ function conflicts_(entry, other) {
   if (entry.layout || other.layout) {
     if (!entry.layout || !other.layout) return false;
     if (entry.layout.kind !== other.layout.kind) return false;
+    // A key narrows a kind: two edits to DIFFERENT named ranges share a kind
+    // but never conflict; two edits to the same one always do.
+    if (entry.layout.key !== undefined || other.layout.key !== undefined) {
+      return entry.layout.key === other.layout.key;
+    }
     if (entry.layout.index !== undefined && other.layout.index !== undefined) {
       const aEnd = entry.layout.index + (entry.layout.count || 1) - 1;
       const bEnd = other.layout.index + (other.layout.count || 1) - 1;
@@ -264,6 +398,18 @@ function applyLayoutInverse_(sheet, inv, entry, index) {
     });
   } else if (inv.kind === 'sheetvis') {
     if (inv.hidden) sheet.hideSheet(); else sheet.showSheet();
+  } else if (inv.kind === 'condfmt') {
+    setCondRules_(writeSpreadsheet_(), sheet, inv.rules || []);
+  } else if (inv.kind === 'namedrange') {
+    const ss = writeSpreadsheet_();
+    const current = namedRange_(ss, inv.name);
+    if (inv.prior) {
+      const priorSheet = ss.getSheetByName(inv.prior.sheetName);
+      if (!priorSheet) throw new Error('Sheet no longer exists: ' + inv.prior.sheetName);
+      ss.setNamedRange(inv.name, priorSheet.getRange(inv.prior.a1));
+    } else if (current) {
+      current.remove();   // it did not exist before the op; undo removes it
+    }
   } else {
     throw new Error('Unknown layout inverse: ' + inv.kind);
   }

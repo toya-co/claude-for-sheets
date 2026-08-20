@@ -35,7 +35,10 @@ test('the tool vocabulary maps 1:1 onto the op protocol', async () => {
      'merge_cells', 'unmerge_cells', 'sort_range',
      'set_column_width', 'set_row_height', 'freeze_panes', 'rename_sheet',
      'hide_rows', 'show_rows', 'hide_columns', 'show_columns',
-     'hide_sheet', 'show_sheet']);
+     'hide_sheet', 'show_sheet',
+     'set_borders', 'set_validation', 'set_conditional_format',
+     'clear_conditional_formats', 'set_note', 'set_named_range',
+     'delete_named_range', 'duplicate_sheet']);
   for (const t of res.result.tools) {
     assert.ok(t.description.length > 20, t.name + ' explains itself to the model');
     assert.strictEqual(t.inputSchema.type, 'object', t.name + ' has a schema');
@@ -66,6 +69,14 @@ test('every write tool requires its target and payload', async () => {
   }
   assert.deepStrictEqual(byName.hide_sheet.inputSchema.required, ['sheetName']);
   assert.deepStrictEqual(byName.show_sheet.inputSchema.required, ['sheetName']);
+  assert.deepStrictEqual(byName.set_borders.inputSchema.required, ['sheetName', 'a1']);
+  assert.deepStrictEqual(byName.set_validation.inputSchema.required, ['sheetName', 'a1', 'rule']);
+  assert.deepStrictEqual(byName.set_conditional_format.inputSchema.required, ['sheetName', 'a1', 'rule']);
+  assert.deepStrictEqual(byName.clear_conditional_formats.inputSchema.required, ['sheetName']);
+  assert.deepStrictEqual(byName.set_note.inputSchema.required, ['sheetName', 'a1']);
+  assert.deepStrictEqual(byName.set_named_range.inputSchema.required, ['name', 'sheetName', 'a1']);
+  assert.deepStrictEqual(byName.delete_named_range.inputSchema.required, ['name']);
+  assert.deepStrictEqual(byName.duplicate_sheet.inputSchema.required, ['sheetName']);
   assert.ok(!byName.read_range.inputSchema.required, 'read_range args are all optional');
 });
 
