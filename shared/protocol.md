@@ -3,6 +3,13 @@
 The contract between the sidebar and Apps Script. Both halves of the repo depend
 on it, which is why it lives here rather than inside either one.
 
+**The live transport is the MCP tool loop** (`daemon/src/mcp-bridge.js`): Claude
+calls `read_range` / `set_values` / `set_formulas` / `set_formats` /
+`clear_range`, and the sidebar translates each 1:1 into the ops below and
+executes it. The envelope, the gate, and undo semantics in this file are
+unchanged by that — tools are a delivery mechanism for ops, not a second
+protocol.
+
 **Keep it transport-agnostic.** The same vocabulary runs over `google.script.run`
 today and over the Sheets REST API in the headless/MCP path later
 (`ARCHITECTURE.md` §7). Anything Apps-Script-shaped that leaks into these

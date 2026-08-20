@@ -21,10 +21,11 @@ Nothing is hosted. No Google tokens are stored anywhere, by anyone.
 
 ## Status
 
-**M5 — a turn can make several changes, and you can undo any one of them.** Type
-an instruction, the local app runs it on your Claude subscription, and the sheet
-changes. Turns continue each other, so "now make it bold" knows what "it" is.
-Anything that would overwrite your data asks first.
+**M5.7 — Claude works your sheet with live tools.** It reads ranges when it
+needs to, edits through tool calls, sees each result, and keeps going — like
+Claude in Chrome, wrapped in your sidebar. Turns continue each other, every
+change is its own undo entry, and anything that would overwrite your data asks
+first.
 
 | Milestone | State |
 |---|---|
@@ -35,6 +36,7 @@ Anything that would overwrite your data asks first.
 | M4 streaming · M6 one-button undo | ✅ landed with M3 |
 | M4.5 one conversation per spreadsheet | ✅ memory, and 5.5× cheaper per turn |
 | M5 multi-op turns + confirmation gate | ✅ four value ops, per-op undo, stale-context guard |
+| M5.7 live tool loop (read, write, continue) | ✅ verified end to end |
 | M7 restorable history | ✅ undo any entry; blocked when a later edit overlaps |
 | M5.5 web search and fetch, behind the gate | next |
 

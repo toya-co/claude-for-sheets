@@ -30,6 +30,8 @@ not slide with use.
 | `POST /pair` | `{spreadsheetId, allow}` — settles a pending request |
 | `POST /reset` | `{spreadsheetId}` — ends the conversation, keeps the pairing |
 | `POST /unpair` | `{spreadsheetId}` — revokes |
+| `POST /bridge/call` | MCP bridge only — token-gated; relays a tool call to the sidebar |
+| `POST /op-result` | Sidebar answering a tool call; the unguessable `callId` is the credential |
 
 ### `/turn` event vocabulary
 
@@ -37,6 +39,7 @@ not slide with use.
 {type:'pairing_required', spreadsheetName}   waiting on the dashboard
 {type:'paired'}                              approved, proceeding
 {type:'session', model, sessionId, resumed}   Claude started
+{type:'tool_call', callId, name, args}       execute this and POST /op-result
 {type:'text', delta}                         incremental output
 {type:'done', costUsd, usage}                turn complete
 {type:'error', code, message}                AUTH_FAILED · CLI_NOT_FOUND · PAIRING_DENIED · …
@@ -61,10 +64,12 @@ the CLI would otherwise inherit: `--system-prompt` replaces the coding prompt,
 `--strict-mcp-config` drops MCP servers, `--tools ""` removes every tool, and cwd
 is a neutral `~/.claude-sheets/workspace` so no `CLAUDE.md` is discovered.
 
-Claude has **no tools at all** here. It proposes sheet operations; the sidebar
-executes them via Apps Script. So a prompt injection hidden in a cell cannot
-reach your filesystem — worst case is one spreadsheet, which the undo history
-covers.
+Claude's **only tools are ours**: five sheet tools served by `mcp-bridge.js`
+(granted with `--allowedTools "mcp__sheets"`, verified as the only entries on
+the `init` line). Every call is executed by the *sidebar* through Apps Script,
+behind the confirmation gate — this process cannot touch a spreadsheet, it can
+only ask. So a prompt injection hidden in a cell cannot reach your filesystem —
+worst case is one spreadsheet, which the undo history covers.
 
 **`--tools ""` and never a denylist.** This was `--disallowedTools` naming ten
 tools, and a live `init` line showed eighteen others still available, including
@@ -147,16 +152,17 @@ inside the user's own spreadsheet so restore works with this app closed. See
 ## Layout
 
 ```
-src/index.js      HTTPS server, routes, pairing lifecycle, prompt assembly
+src/index.js      HTTPS server, routes, pairing lifecycle, tool-call relay
 src/claude.js     CLI resolution, spawn, stream-json parsing
+src/mcp-bridge.js stdio MCP server the CLI spawns; forwards tool calls here
 src/store.js      on-disk paired list + activity index
 src/dashboard.js  dashboard HTML
 ```
 
 ## Status
 
-M5 complete. The system prompt now teaches four value ops and multi-block
-replies; verified live that a two-part request ("put a header in D1, and make it
-bold") comes back as two separate `sheetop` blocks. Execution, the confirmation
-gate, and undo overlap live in the add-on half and are covered by `npm test`.
-M5.5 adds web search and fetch behind that same gate.
+M5.7 complete — the tool loop over MCP. Claude reads and edits through real
+tools; the sidebar executes every call behind the M5 gate, and each write stays
+its own undo entry. Verified end to end with a scripted sidebar stand-in: a
+null-context turn produced read_range, a correct =SUM formula, a label, and
+bold, in one conversation. M5.5 (web search/fetch behind the gate) is next.

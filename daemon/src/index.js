@@ -8,14 +8,15 @@
  *   npm run certs   # once
  *   npm start
  *
- * Routes: /ping, /turn (streaming), /pair, /unpair, /instructions, /reset, and
- * the dashboard. One Claude Code session is kept per spreadsheet so a turn can
- * refer to the last one; the multi-op tool loop is still M5.
+ * Routes: /ping, /turn (streaming), /pair, /unpair, /instructions, /reset,
+ * /bridge/call + /op-result (the tool loop), and the dashboard. One Claude Code
+ * session is kept per spreadsheet so a turn can refer to the last one.
  */
 
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const { randomBytes } = require('crypto');
 
 const store = require('./store');
 const claude = require('./claude');
@@ -33,6 +34,47 @@ const VERSION = require('../package.json').version;
 
 // Pending pairing requests, keyed by spreadsheetId, resolved by the dashboard.
 const pending = new Map();
+
+/**
+ * The tool loop's relay state.
+ *
+ * `turns` maps a per-turn token (known only to this process and the MCP bridge
+ * it spawns) to the turn's SSE writer. `toolCalls` maps a call ID to its
+ * resolver while the sidebar works. Call IDs are 128-bit random: the sidebar
+ * proves membership in the turn by echoing one back, which a hostile page
+ * cannot guess — the same reasoning as the pairing boundary.
+ */
+const turns = new Map();
+const toolCalls = new Map();
+
+/** How long the sidebar gets to answer one tool call. Generous, because a
+ * gated write legitimately waits on a human clicking "Do it". */
+const TOOL_CALL_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Relay one bridge call to the sidebar and wait for /op-result.
+ */
+function relayToolCall(turn, name, args) {
+  return new Promise((resolve) => {
+    const callId = randomBytes(16).toString('hex');
+    const timer = setTimeout(() => {
+      toolCalls.delete(callId);
+      resolve({ ok: false, error: 'The sidebar did not answer within 5 minutes. The user may have closed it, or left a confirmation unanswered.' });
+    }, TOOL_CALL_TIMEOUT_MS);
+
+    toolCalls.set(callId, { resolve, timer });
+    turn.send({ type: 'tool_call', callId, name, args });
+  });
+}
+
+function settleToolCall(callId, result) {
+  const call = toolCalls.get(callId);
+  if (!call) return false;
+  clearTimeout(call.timer);
+  toolCalls.delete(callId);
+  call.resolve({ ok: true, result });
+  return true;
+}
 
 function loadCerts() {
   const local = path.join(__dirname, '..', 'certs');
@@ -177,6 +219,21 @@ async function handleTurn(req, res) {
   const started = Date.now();
   fs.mkdirSync(WORKSPACE, { recursive: true });
 
+  // The tool loop: this turn's CLI process gets an MCP server (mcp-bridge.js)
+  // whose every call lands back here, tagged with a token only that bridge
+  // holds, and is relayed to this SSE stream for the sidebar to execute.
+  const turnToken = randomBytes(24).toString('hex');
+  turns.set(turnToken, { send });
+  const mcpConfig = {
+    mcpServers: {
+      sheets: {
+        command: process.execPath,
+        args: [path.join(__dirname, 'mcp-bridge.js')],
+        env: { SHEETS_TURN_TOKEN: turnToken, SHEETS_DAEMON_PORT: String(PORT) },
+      },
+    },
+  };
+
   // Continue this spreadsheet's conversation. Without it every turn is a fresh
   // process: "now make it bold" has no referent, and the ~25k CLI baseline is
   // re-created instead of read from cache.
@@ -186,7 +243,9 @@ async function handleTurn(req, res) {
     model: store.getSettings().model,
     sessionId: priorSession,
     resume: Boolean(priorSession),
+    mcpConfig,
   });
+  turns.delete(turnToken);
 
   // Persist whatever session actually opened — which is a new one if the stored
   // ID had gone missing and runTurn fell back.
@@ -253,6 +312,21 @@ const server = https.createServer(loadCerts(), async (req, res) => {
         if (scope === 'global') store.setGlobalInstructions(text);
         else store.setSheetInstructions(spreadsheetId, text);
         return json(res, 200, { ok: true });
+      }
+
+      // The MCP bridge forwarding a tool call. Token-gated: only the bridge
+      // spawned for a live turn knows it, so no web page can drive this.
+      case 'POST /bridge/call': {
+        const { token, name, arguments: args } = await readBody(req);
+        const turn = turns.get(token);
+        if (!turn) return json(res, 403, { ok: false, error: 'unknown or finished turn' });
+        return json(res, 200, await relayToolCall(turn, name, args));
+      }
+
+      // The sidebar answering one. The unguessable callId is the credential.
+      case 'POST /op-result': {
+        const { callId, result } = await readBody(req);
+        return json(res, 200, { settled: settleToolCall(callId, result) });
       }
 
       case 'POST /reset': {

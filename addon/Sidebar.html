@@ -55,9 +55,9 @@
 
     <main>
       <div class="banner" id="banner">
-        <b>M5.</b> A turn can make several changes. Each is undone separately, and
-        anything that would overwrite existing content asks first. Row and column
-        edits come later.
+        Claude reads and edits this sheet with live tools. Every change is its own
+        undo entry, and anything that would overwrite existing content asks first.
+        Row and column edits come later.
       </div>
       <div id="log"></div>
       <div class="hist" id="hist" style="display:none"></div>
@@ -266,6 +266,144 @@
           .undoOp(opId, Boolean(force));
       }
 
+      // ---- the tool loop ----------------------------------------------------
+      //
+      // Claude's tool calls arrive over the turn's SSE stream as
+      // {type:'tool_call', callId, name, args}: the daemon is only a relay, and
+      // this sidebar is the executor. Whatever happens — result, refusal, user
+      // skipping a gated write — is POSTed back to /op-result under the callId,
+      // and the model's turn resumes with that answer.
+      //
+      // The confirmation gate stays in Apps Script (Ops.gs), exactly as before.
+      // This code just renders the question when applyOps stops to ask.
+
+      const TOOL_OPS = {
+        set_values:   { type: 'setValues',   verb: 'writing',    payload: 'values' },
+        set_formulas: { type: 'setFormulas', verb: 'writing',    payload: 'formulas' },
+        set_formats:  { type: 'setFormats',  verb: 'formatting', payload: 'format' },
+        clear_range:  { type: 'clear',       verb: 'clearing',   payload: 'what' },
+      };
+
+      function postOpResult(callId, result) {
+        return fetch(DAEMON + '/op-result', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callId, result }),
+        }).catch(() => {});
+      }
+
+      function handleToolCall(ev, container) {
+        const node = container.appendChild(document.createElement('div'));
+        node.className = 'op';
+        const where = (ev.args && (ev.args.sheetName || '')) +
+                      (ev.args && ev.args.a1 ? '!' + ev.args.a1 : '');
+
+        if (ev.name === 'read_range') {
+          node.innerHTML = 'reading <span class="a1">' + esc(where || 'active sheet') + '</span>…';
+          google.script.run
+            .withSuccessHandler((c) => {
+              ctx = c;   // a read refreshes our own picture of the sheet too
+              node.className = 'op done';
+              node.innerHTML = 'read <span class="a1">' +
+                esc(c.active.sheetName + '!' + c.active.a1) + '</span>' +
+                (c.active.truncated ? ' <i>(truncated)</i>' : '');
+              postOpResult(ev.callId, {
+                sheets: c.sheets,
+                sheetName: c.active.sheetName,
+                a1: c.active.a1,
+                truncated: c.active.truncated,
+                values: c.active.values,
+                formulas: c.active.formulas,
+              });
+            })
+            .withFailureHandler((err) => {
+              node.className = 'op err';
+              node.textContent = 'read failed: ' + err.message;
+              postOpResult(ev.callId, { error: String(err.message || err) });
+            })
+            .getContext({ sheetName: ev.args && ev.args.sheetName, a1: ev.args && ev.args.a1 });
+          return;
+        }
+
+        const map = TOOL_OPS[ev.name];
+        if (!map) {
+          node.className = 'op err';
+          node.textContent = 'unknown tool: ' + ev.name;
+          postOpResult(ev.callId, { error: 'unknown tool: ' + ev.name });
+          return;
+        }
+
+        const op = {
+          type: map.type,
+          sheetName: ev.args.sheetName,
+          a1: ev.args.a1,
+        };
+        op[map.payload] = ev.args[map.payload];
+        node.innerHTML = esc(map.verb) + ' <span class="a1">' + esc(where) + '</span>…';
+        submitToolOp(ev.callId, op, node, []);
+      }
+
+      function submitToolOp(callId, op, node, confirmed) {
+        google.script.run
+          .withSuccessHandler((res) => {
+            const r = (res.results && res.results[0]) || res;
+
+            if (r.needsConfirmation) {
+              node.className = 'op ask';
+              node.innerHTML = 'Claude wants to <b>' + esc(r.reason) + '</b> in ' +
+                '<span class="a1">' + esc(r.target) + '</span>.' +
+                '<div class="why">It can be undone afterwards.</div>';
+              const yes = document.createElement('button');
+              yes.textContent = 'Do it';
+              yes.onclick = () => {
+                node.className = 'op';
+                node.innerHTML = 'applying…';
+                submitToolOp(callId, op, node, [op.opId || r.opId]);
+              };
+              const no = document.createElement('button');
+              no.textContent = 'Skip';
+              no.style.marginLeft = '6px';
+              no.onclick = () => {
+                node.className = 'op';
+                node.innerHTML = 'skipped <span class="a1">' + esc(r.target) + '</span>';
+                postOpResult(callId, { skipped: true,
+                  message: 'The user chose not to apply this change (' + r.reason + '). Respect that decision.' });
+              };
+              node.appendChild(document.createElement('br'));
+              node.appendChild(yes);
+              node.appendChild(no);
+              // opId must survive to the confirmed re-submit
+              op.opId = r.opId;
+              return;
+            }
+
+            if (!r.ok) {
+              node.className = 'op err';
+              node.innerHTML = '<b>' + esc(r.error.code) + '</b><br>' + esc(r.error.message);
+              postOpResult(callId, { error: r.error.code + ': ' + r.error.message });
+              return;
+            }
+
+            node.className = 'op done';
+            node.innerHTML = esc(verb(r.type)) + ' <span class="a1">' + esc(r.applied) + '</span>' +
+              (r.restorable ? '' : ' <i>(too large to undo)</i>');
+            if (r.restorable) {
+              const b = document.createElement('button');
+              b.textContent = 'Undo';
+              b.onclick = () => undo(r.opId, node);
+              node.appendChild(document.createElement('br'));
+              node.appendChild(b);
+            }
+            postOpResult(callId, { ok: true, applied: r.applied, restorable: r.restorable });
+          })
+          .withFailureHandler((err) => {
+            node.className = 'op err';
+            node.textContent = 'Apps Script error: ' + err.message;
+            postOpResult(callId, { error: String(err.message || err) });
+          })
+          .applyOps({ ops: [op], confirmed: confirmed });
+      }
+
       // ---- context ----------------------------------------------------------
       function refreshContext() {
         return new Promise((resolve) => {
@@ -323,6 +461,8 @@
                   'open <span class="a1">' + DAEMON + '</span> and allow this spreadsheet.</i>';
               } else if (ev.type === 'paired') {
                 bubble.innerHTML = '';
+              } else if (ev.type === 'tool_call') {
+                handleToolCall(ev, node);
               } else if (ev.type === 'text') {
                 acc += ev.delta;
                 bubble.textContent = stripOps(acc);

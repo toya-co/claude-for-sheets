@@ -25,15 +25,32 @@ function valueAfter(list, flag) {
   return i === -1 ? undefined : list[i + 1];
 }
 
-test('tools are an allowlist of nothing, not a denylist', () => {
+test('built-in tools are an allowlist of nothing, not a denylist', () => {
   const a = args();
   assert.ok(a.includes('--tools'), '--tools is passed');
   assert.strictEqual(valueAfter(a, '--tools'), '',
-    'empty string is what disables every tool');
+    'empty string is what disables every built-in tool');
   assert.ok(!a.includes('--disallowedTools'),
     'a denylist silently fails open as the CLI grows new tools — never reintroduce it');
-  assert.ok(!a.includes('--allowedTools'),
-    'an allowlist naming anything is a tool this app does not need');
+});
+
+test('without an MCP config, no tool grant of any kind exists', () => {
+  const a = args();
+  assert.ok(!a.includes('--mcp-config'));
+  assert.ok(!a.includes('--allowedTools'));
+});
+
+test('the sheets MCP server is the only grant, and only when configured', () => {
+  const cfg = { mcpServers: { sheets: { command: 'node', args: ['x'] } } };
+  const a = args({ mcpConfig: cfg });
+  assert.strictEqual(valueAfter(a, '--mcp-config'), JSON.stringify(cfg),
+    'the config rides inline as one argv element');
+  assert.strictEqual(valueAfter(a, '--allowedTools'), 'mcp__sheets',
+    'exactly the sheets server — never a broader grant');
+  assert.strictEqual(valueAfter(a, '--tools'), '',
+    'built-ins stay disabled even with MCP tools present');
+  assert.ok(a.includes('--strict-mcp-config'),
+    "the user's own MCP servers stay out regardless");
 });
 
 test('MCP servers are dropped regardless of the user config', () => {
