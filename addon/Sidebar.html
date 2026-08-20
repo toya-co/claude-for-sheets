@@ -222,6 +222,7 @@
       function submitToolOp(callId, op, node, confirmed) {
         google.script.run
           .withSuccessHandler((res) => {
+           try {
             // Accounts for the write we just made, so the next op in this turn
             // is not rejected for our own edit.
             if (res.guard) guardState = res.guard;
@@ -287,6 +288,12 @@
               node.appendChild(b);
             }
             postOpResult(callId, { ok: true, applied: r.applied, restorable: r.restorable });
+           } catch (e) {
+            // Answer anyway. A cosmetic bug must never hold a turn open.
+            node.className = 'op err';
+            node.textContent = 'Sidebar error: ' + (e && e.message || e);
+            postOpResult(callId, { error: 'the sidebar could not handle the result: ' + (e && e.message || e) });
+           }
           })
           .withFailureHandler((err) => {
             node.className = 'op err';
@@ -294,6 +301,46 @@
             postOpResult(callId, { error: String(err.message || err) });
           })
           .applyOps({ ops: [op], confirmed: confirmed, guard: guardState });
+      }
+
+      function verb(type) {
+        return type === 'clear' ? 'cleared'
+             : type === 'setFormats' ? 'formatted'
+             : type === 'setFormulas' ? 'set formulas in'
+             : type === 'insertRows' || type === 'insertColumns' ? 'inserted'
+             : type === 'deleteRows' || type === 'deleteColumns' ? 'deleted'
+             : type === 'addSheet' ? 'added'
+             : type === 'deleteSheet' ? 'deleted'
+             : 'wrote';
+      }
+
+      // Undo can refuse: restoring a range that a later change also touched would
+      // revert that later change too, without saying so. Offer the override
+      // rather than either hiding the option or silently taking the risk.
+      function undo(opId, node, force) {
+        const previous = node.innerHTML;
+        node.innerHTML = 'undoing…';
+        google.script.run
+          .withSuccessHandler((res) => {
+            if (res && res.ok === false && res.code === 'BLOCKED_BY_LATER_EDIT') {
+              node.className = 'op ask';
+              node.innerHTML = esc(res.message);
+              const anyway = document.createElement('button');
+              anyway.textContent = 'Undo anyway';
+              anyway.onclick = () => { node.innerHTML = previous; undo(opId, node, true); };
+              node.appendChild(document.createElement('br'));
+              node.appendChild(anyway);
+              return;
+            }
+            node.className = 'op';
+            node.innerHTML = 'restored <span class="a1">' + esc(res.restored) + '</span>';
+            refreshContext();
+          })
+          .withFailureHandler((err) => {
+            node.className = 'op err';
+            node.textContent = 'Undo failed: ' + err.message;
+          })
+          .undoOp(opId, Boolean(force));
       }
 
       // ---- context ----------------------------------------------------------
@@ -307,6 +354,10 @@
       }
 
       // ---- one turn ---------------------------------------------------------
+      // Lets New chat abandon a turn that is waiting on something that will
+      // never arrive, instead of leaving the composer disabled.
+      let turnAbort = null;
+
       async function send() {
         const text = $('prompt').value.trim();
         if (!text) return;
@@ -320,8 +371,10 @@
         let acc = '';
 
         try {
+          turnAbort = new AbortController();
           const res = await fetch(DAEMON + '/turn', {
             method: 'POST',
+            signal: turnAbort.signal,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               spreadsheetId: ctx && ctx.spreadsheetId,
@@ -366,9 +419,14 @@
           }
 
         } catch (e) {
-          bubble.innerHTML = '<span style="color:var(--bad)">Could not reach the local app. ' +
-            'Is it running? ' + esc(e.message) + '</span>';
+          if (e && e.name === 'AbortError') {
+            bubble.innerHTML = '<i>Stopped.</i>';
+          } else {
+            bubble.innerHTML = '<span style="color:var(--bad)">Could not reach the local app. ' +
+              'Is it running? ' + esc(e.message) + '</span>';
+          }
         } finally {
+          turnAbort = null;
           $('send').disabled = false;
         }
       }
@@ -405,17 +463,27 @@
       // into an unrelated question. Clears the transcript on the daemon side; the
       // sheet's edit history is separate and untouched.
       $('newChat').onclick = async () => {
-        if (!ctx || !ctx.spreadsheetId) return;
+        // Recover the UI first and unconditionally. New chat is the escape hatch
+        // from a wedged turn, so it has to work when nothing else does — before
+        // any check that could return early, and before any await that could throw.
+        if (turnAbort) { turnAbort.abort(); turnAbort = null; }
+        $('send').disabled = false;
+        guardState = null;
+        $('log').innerHTML = '';
+
+        if (!ctx || !ctx.spreadsheetId) {
+          addMsg('user', '<i>New conversation.</i>');
+          return;
+        }
         try {
           await fetch(DAEMON + '/reset', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ spreadsheetId: ctx.spreadsheetId }),
           });
-          $('log').innerHTML = '';
           addMsg('user', '<i>New conversation. Claude no longer remembers the turns above.</i>');
         } catch {
-          addMsg('user', '<i>Could not reach the local app.</i>');
+          addMsg('user', '<i>Cleared here, but the local app could not be reached to reset its side.</i>');
         }
       };
 
