@@ -100,6 +100,12 @@ class FakeRange {
   getFontColors() { return this._read('fontColors'); }
   getNumberFormats() { return this._read('numberFormats'); }
   getHorizontalAlignments() { return this._read('horizontalAlignments'); }
+  getFontStyles() { return this._read('fontStyles'); }
+  getFontSizes() { return this._read('fontSizes'); }
+  getFontFamilies() { return this._read('fontFamilies'); }
+  getWraps() { return this._read('wraps'); }
+  getVerticalAlignments() { return this._read('verticalAlignments'); }
+  getFontLines() { return this._read('fontLines'); }
 
   setValues(g) { this._write('values', g); return this; }
   setFormulas(g) { this._write('formulas', g); return this; }
@@ -108,6 +114,12 @@ class FakeRange {
   setFontColors(g) { this._write('fontColors', g); return this; }
   setNumberFormats(g) { this._write('numberFormats', g); return this; }
   setHorizontalAlignments(g) { this._write('horizontalAlignments', g); return this; }
+  setFontStyles(g) { this._write('fontStyles', g); return this; }
+  setFontSizes(g) { this._write('fontSizes', g); return this; }
+  setFontFamilies(g) { this._write('fontFamilies', g); return this; }
+  setWraps(g) { this._write('wraps', g); return this; }
+  setVerticalAlignments(g) { this._write('verticalAlignments', g); return this; }
+  setFontLines(g) { this._write('fontLines', g); return this; }
 
   setBackground(v) { this._fill('backgrounds', v); return this; }
   setFontColor(v) { this._fill('fontColors', v); return this; }
@@ -115,19 +127,87 @@ class FakeRange {
   setFontStyle(v) { this._fill('fontStyles', v); return this; }
   setNumberFormat(v) { this._fill('numberFormats', v); return this; }
   setHorizontalAlignment(v) { this._fill('horizontalAlignments', v); return this; }
+  setFontSize(v) { this._fill('fontSizes', v); return this; }
+  setFontFamily(v) { this._fill('fontFamilies', v); return this; }
+  setWrap(v) { this._fill('wraps', Boolean(v)); return this; }
+  setVerticalAlignment(v) { this._fill('verticalAlignments', v); return this; }
+  setFontLine(v) { this._fill('fontLines', v); return this; }
 
   clearContent() { this._fill('values', ''); this._fill('formulas', ''); return this; }
   clearFormat() {
-    ['backgrounds', 'fontWeights', 'fontColors', 'numberFormats', 'horizontalAlignments']
+    ['backgrounds', 'fontWeights', 'fontColors', 'numberFormats', 'horizontalAlignments',
+     'fontStyles', 'fontSizes', 'fontFamilies', 'wraps', 'verticalAlignments', 'fontLines']
       .forEach((l) => this._fill(l, ''));
     return this;
   }
   clear() { this.clearContent(); this.clearFormat(); return this; }
+
+  // ---- merges. Real merge() keeps only the top-left value of the block and
+  // deletes the rest — the destructiveness the gate exists to catch.
+  _intersects(m) {
+    return m.row <= this.row + this.rows - 1 && this.row <= m.row + m.rows - 1 &&
+           m.col <= this.col + this.cols - 1 && this.col <= m.col + m.cols - 1;
+  }
+  merge() { this.sheet._merge(this.row, this.col, this.rows, this.cols); return this; }
+  mergeAcross() {
+    for (let r = 0; r < this.rows; r++) this.sheet._merge(this.row + r, this.col, 1, this.cols);
+    return this;
+  }
+  mergeVertically() {
+    for (let c = 0; c < this.cols; c++) this.sheet._merge(this.row, this.col + c, this.rows, 1);
+    return this;
+  }
+  breakApart() {
+    this.sheet.merges = this.sheet.merges.filter((m) => !this._intersects(m));
+    return this;
+  }
+  getMergedRanges() {
+    return this.sheet.merges.filter((m) => this._intersects(m))
+      .map((m) => new FakeRange(this.sheet, m.row, m.col, m.rows, m.cols));
+  }
+
+  /**
+   * Range.sort. Column positions are absolute sheet columns, as in the real
+   * API. Rows move across every layer — values, formulas, and formats travel
+   * together. One infidelity, documented: real Sheets adjusts relative formula
+   * references as rows move; the fake moves formula text verbatim.
+   */
+  sort(specs) {
+    const list = (Array.isArray(specs) ? specs : [specs]).map((s) =>
+      (typeof s === 'object' ? s : { column: s, ascending: true }));
+    const layers = Object.keys(this.sheet.layers);
+    const rows = [];
+    for (let r = 0; r < this.rows; r++) {
+      const data = {};
+      for (const l of layers) {
+        data[l] = [];
+        for (let c = 0; c < this.cols; c++) data[l].push(this.sheet._get(l, this.row + r, this.col + c));
+      }
+      rows.push({ i: r, data });
+    }
+    rows.sort((a, b) => {
+      for (const s of list) {
+        const ci = s.column - this.col;
+        const av = a.data.values[ci], bv = b.data.values[ci];
+        if (av === bv) continue;
+        return (av < bv ? -1 : 1) * (s.ascending === false ? -1 : 1);
+      }
+      return a.i - b.i;
+    });
+    rows.forEach((row, r) => {
+      for (const l of layers) {
+        for (let c = 0; c < this.cols; c++) this.sheet._set(l, this.row + r, this.col + c, row.data[l][c]);
+      }
+    });
+    return this;
+  }
 }
 
 const LAYER_DEFAULTS = {
   values: '', formulas: '', backgrounds: '#ffffff', fontWeights: 'normal',
   fontColors: '#000000', numberFormats: '', horizontalAlignments: '', fontStyles: 'normal',
+  fontSizes: 10, fontFamilies: 'Arial', wraps: false, verticalAlignments: 'bottom',
+  fontLines: 'none',
 };
 
 class FakeSheet {
@@ -136,7 +216,34 @@ class FakeSheet {
     this.sheetId = sheetId;
     this.layers = {};
     this.hidden = false;
+    this.merges = [];                  // {row, col, rows, cols}
+    this.columnWidths = new Map();     // col -> px (default 100)
+    this.rowHeights = new Map();       // row -> px (default 21)
+    this.frozenRows = 0;
+    this.frozenCols = 0;
+    this.hiddenRows = new Set();
+    this.hiddenCols = new Set();
     Object.keys(LAYER_DEFAULTS).forEach((l) => { this.layers[l] = new Map(); });
+  }
+
+  /**
+   * Merge a block: absorb any merges it fully contains, then delete every
+   * value and formula except the top-left — the real API's behavior, and the
+   * destructiveness the gate exists to catch.
+   */
+  _merge(row, col, rows, cols) {
+    if (rows === 1 && cols === 1) return;
+    this.merges = this.merges.filter((m) =>
+      !(m.row >= row && m.col >= col &&
+        m.row + m.rows <= row + rows && m.col + m.cols <= col + cols));
+    for (let r = row; r < row + rows; r++) {
+      for (let c = col; c < col + cols; c++) {
+        if (r === row && c === col) continue;
+        this._set('values', r, c, '');
+        this._set('formulas', r, c, '');
+      }
+    }
+    this.merges.push({ row, col, rows, cols });
   }
   _key(r, c) { return r + ':' + c; }
   _get(layer, r, c) {
@@ -148,11 +255,41 @@ class FakeSheet {
   _set(layer, r, c, v) { this.layers[layer].set(this._key(r, c), v); }
 
   getName() { return this.name; }
+  setName(n) { this.name = n; return this; }
   getSheetId() { return this.sheetId; }
   getIndex() {
     return this._parent ? this._parent.sheets.indexOf(this) + 1 : this.sheetId + 1;
   }
   hideSheet() { this.hidden = true; return this; }
+  showSheet() { this.hidden = false; return this; }
+  isSheetHidden() { return this.hidden; }
+
+  getColumnWidth(c) { return this.columnWidths.has(c) ? this.columnWidths.get(c) : 100; }
+  setColumnWidth(c, w) { this.columnWidths.set(c, w); return this; }
+  getRowHeight(r) { return this.rowHeights.has(r) ? this.rowHeights.get(r) : 21; }
+  setRowHeight(r, h) { this.rowHeights.set(r, h); return this; }
+  getFrozenRows() { return this.frozenRows; }
+  setFrozenRows(n) { this.frozenRows = n; return this; }
+  getFrozenColumns() { return this.frozenCols; }
+  setFrozenColumns(n) { this.frozenCols = n; return this; }
+  hideRows(start, num) {
+    for (let i = start; i < start + (num || 1); i++) this.hiddenRows.add(i);
+    return this;
+  }
+  showRows(start, num) {
+    for (let i = start; i < start + (num || 1); i++) this.hiddenRows.delete(i);
+    return this;
+  }
+  isRowHiddenByUser(r) { return this.hiddenRows.has(r); }
+  hideColumns(start, num) {
+    for (let i = start; i < start + (num || 1); i++) this.hiddenCols.add(i);
+    return this;
+  }
+  showColumns(start, num) {
+    for (let i = start; i < start + (num || 1); i++) this.hiddenCols.delete(i);
+    return this;
+  }
+  isColumnHiddenByUser(c) { return this.hiddenCols.has(c); }
 
   // Real Sheets counts a formula-only cell as content for getLastRow/Column
   // (its computed value occupies the cell). The fake keeps values and formulas

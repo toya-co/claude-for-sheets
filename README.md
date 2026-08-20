@@ -21,11 +21,14 @@ Nothing is hosted. No Google tokens are stored anywhere, by anyone.
 
 ## Status
 
-**M8 — Claude works your sheet with live tools, structure included.** It reads
-ranges when it needs to, edits values, formulas, formats, rows, columns, and
-tabs through tool calls, sees each result, and keeps going — like Claude in
-Chrome, wrapped in your sidebar. Turns continue each other, every change is its
-own undo entry, and anything destructive asks first.
+**M8.5 — Claude works your sheet with live tools, near-parity coverage.** It
+reads ranges when it needs to, then edits values, formulas, and formats (fonts,
+sizes, wrap, alignment); merges, sorts, resizes, freezes, hides, and renames;
+and restructures rows, columns, and tabs — seeing each result and continuing,
+like Claude in Chrome, wrapped in your sidebar. Turns continue each other,
+every change is its own undo entry, and anything destructive asks first. Not
+yet: borders, conditional formatting, data validation, notes, charts — it will
+say so rather than improvise.
 
 | Milestone | State |
 |---|---|
@@ -40,6 +43,7 @@ own undo entry, and anything destructive asks first.
 | M7 restorable history | ✅ undo any entry; blocked when a later edit overlaps |
 | M8 rows, columns, and tabs — with undo | ✅ deletes snapshot first; sheet deletes always ask |
 | M9 mid-turn edit detection | ✅ your typing aborts Claude's write, never the reverse |
+| M8.5 capability parity tier 1 | ✅ merge, sort, resize, freeze, hide, rename — all undoable |
 | M5.5 web search and fetch, behind the gate | next |
 
 Full plan in [`ARCHITECTURE.md`](ARCHITECTURE.md). The platform verification

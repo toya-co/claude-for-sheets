@@ -57,12 +57,25 @@ function snapshotRange_(sheet, range) {
     fontColors: range.getFontColors(),
     numberFormats: range.getNumberFormats(),
     horizontalAlignments: range.getHorizontalAlignments(),
+    fontStyles: range.getFontStyles(),
+    fontSizes: range.getFontSizes(),
+    fontFamilies: range.getFontFamilies(),
+    wraps: range.getWraps(),
+    verticalAlignments: range.getVerticalAlignments(),
+    fontLines: range.getFontLines(),
   };
 }
 
-function restoreSnapshot_(snap) {
-  const sheet = writeSpreadsheet_().getSheetByName(snap.sheetName);
-  if (!sheet) throw new Error('Sheet no longer exists: ' + snap.sheetName);
+/**
+ * `sheetName` overrides the name frozen inside the payload: a renameSheet op
+ * rewrites the *index* entries to the new name, but rewriting every chunked
+ * payload would be a full history rewrite — so the caller passes the entry's
+ * current name and the payload's copy is only a fallback.
+ */
+function restoreSnapshot_(snap, sheetName) {
+  const name = sheetName || snap.sheetName;
+  const sheet = writeSpreadsheet_().getSheetByName(name);
+  if (!sheet) throw new Error('Sheet no longer exists: ' + name);
   const range = sheet.getRange(snap.a1);
 
   // Formulas first, then values — setValues would clobber a restored formula,
@@ -77,6 +90,14 @@ function restoreSnapshot_(snap) {
   range.setFontColors(snap.fontColors);
   range.setNumberFormats(snap.numberFormats);
   range.setHorizontalAlignments(snap.horizontalAlignments);
+  // Guarded: snapshots recorded before these fields existed lack them, and a
+  // partial restore beats a thrown undo.
+  if (snap.fontStyles) range.setFontStyles(snap.fontStyles);
+  if (snap.fontSizes) range.setFontSizes(snap.fontSizes);
+  if (snap.fontFamilies) range.setFontFamilies(snap.fontFamilies);
+  if (snap.wraps) range.setWraps(snap.wraps);
+  if (snap.verticalAlignments) range.setVerticalAlignments(snap.verticalAlignments);
+  if (snap.fontLines) range.setFontLines(snap.fontLines);
   SpreadsheetApp.flush();
 }
 
@@ -168,6 +189,23 @@ function conflicts_(entry, other) {
   if (!entry.sheetName || !other.sheetName) return false;
   if (entry.sheetName !== other.sheetName) return false;
   if (entry.structural || other.structural) return true;
+
+  // Layout entries (widths, heights, frozen panes, hidden spans, tab name and
+  // visibility) live on their own plane: they never disturb cell content, so
+  // they conflict only with a later layout entry of the SAME kind whose span
+  // overlaps — two width changes to the same columns, say. Kinds with no span
+  // (freeze, rename, visibility) conflict whenever the kind matches.
+  if (entry.layout || other.layout) {
+    if (!entry.layout || !other.layout) return false;
+    if (entry.layout.kind !== other.layout.kind) return false;
+    if (entry.layout.index !== undefined && other.layout.index !== undefined) {
+      const aEnd = entry.layout.index + (entry.layout.count || 1) - 1;
+      const bEnd = other.layout.index + (other.layout.count || 1) - 1;
+      return entry.layout.index <= bEnd && other.layout.index <= aEnd;
+    }
+    return true;
+  }
+
   if (!entry.a1 || !other.a1) return false;
   const sheet = writeSpreadsheet_().getSheetByName(entry.sheetName);
   if (!sheet) return false;
@@ -200,13 +238,48 @@ function laterOverlaps_(index, entry) {
   return blockers;
 }
 
+/** Restore a layout inverse: exactly the prior state the apply recorded. */
+function applyLayoutInverse_(sheet, inv, entry, index) {
+  if (inv.kind === 'colwidth') {
+    inv.widths.forEach(function (w) { sheet.setColumnWidth(w.index, w.width); });
+  } else if (inv.kind === 'rowheight') {
+    inv.heights.forEach(function (h) { sheet.setRowHeight(h.index, h.height); });
+  } else if (inv.kind === 'freeze') {
+    sheet.setFrozenRows(inv.rows);
+    sheet.setFrozenColumns(inv.cols);
+  } else if (inv.kind === 'rename') {
+    // Rename back, and point the history at the restored name again — the
+    // mirror image of what applying the rename did. `index` is the caller's
+    // loaded copy, mutated in place so its single final write wins.
+    const from = entry.sheetName;
+    sheet.setName(inv.to);
+    index.forEach(function (e) { if (e.sheetName === from) e.sheetName = inv.to; });
+  } else if (inv.kind === 'rowshidden') {
+    inv.spans.forEach(function (s) {
+      if (s.hidden) sheet.hideRows(s.index, 1); else sheet.showRows(s.index, 1);
+    });
+  } else if (inv.kind === 'colshidden') {
+    inv.spans.forEach(function (s) {
+      if (s.hidden) sheet.hideColumns(s.index, 1); else sheet.showColumns(s.index, 1);
+    });
+  } else if (inv.kind === 'sheetvis') {
+    if (inv.hidden) sheet.hideSheet(); else sheet.showSheet();
+  } else {
+    throw new Error('Unknown layout inverse: ' + inv.kind);
+  }
+}
+
 /**
- * Undo a structural entry by running its stored inverse.
+ * Undo an entry that carries a stored inverse (structural, merge, layout).
  *
  * Delete-undo is insert-then-rewrite: the coordinates are recreated first, and
  * restoreSnapshot_ then lands on the same A1 the snapshot was taken from.
+ *
+ * `index` is the caller's loaded history index; a rename inverse mutates it in
+ * place rather than writing itself, so the caller's one write at the end is
+ * the only write and cannot be clobbered.
  */
-function applyInverse_(entry) {
+function applyInverse_(entry, index) {
   const ss = writeSpreadsheet_();
   const inv = entry.inverse;
   if (!inv) throw new Error('Structural entry has no inverse recorded.');
@@ -226,12 +299,12 @@ function applyInverse_(entry) {
     needSheet().deleteRows(inv.index, inv.count);
   } else if (inv.type === 'insertRows') {     // undoing a delete: recreate, refill
     needSheet().insertRowsBefore(inv.index, inv.count);
-    restoreSnapshot_(needSnapshot());
+    restoreSnapshot_(needSnapshot(), entry.sheetName);
   } else if (inv.type === 'deleteColumns') {
     needSheet().deleteColumns(inv.index, inv.count);
   } else if (inv.type === 'insertColumns') {
     needSheet().insertColumnsBefore(inv.index, inv.count);
-    restoreSnapshot_(needSnapshot());
+    restoreSnapshot_(needSnapshot(), entry.sheetName);
   } else if (inv.type === 'deleteSheet') {    // undoing addSheet
     ss.deleteSheet(needSheet());
   } else if (inv.type === 'recreateSheet') {  // undoing deleteSheet
@@ -239,7 +312,17 @@ function applyInverse_(entry) {
       throw new Error("A sheet named '" + inv.name + "' already exists.");
     }
     ss.insertSheet(inv.name, inv.index);
-    restoreSnapshot_(needSnapshot());
+    restoreSnapshot_(needSnapshot(), inv.name);
+  } else if (inv.type === 'unmergeRestore') { // undoing mergeCells
+    const sheet = needSheet();
+    sheet.getRange(entry.a1).breakApart();
+    restoreSnapshot_(needSnapshot(), entry.sheetName);
+    (inv.priorMerges || []).forEach(function (a1) { sheet.getRange(a1).merge(); });
+  } else if (inv.type === 'remerge') {        // undoing unmergeCells
+    const sheet = needSheet();
+    (inv.ranges || []).forEach(function (a1) { sheet.getRange(a1).merge(); });
+  } else if (inv.type === 'layout') {
+    applyLayoutInverse_(needSheet(), inv, entry, index);
   } else {
     throw new Error('Unknown inverse type: ' + inv.type);
   }
@@ -276,13 +359,13 @@ function undoOp(opId, force) {
   }
 
   let restored;
-  if (entry.structural) {
-    restored = applyInverse_(entry);
+  if (entry.inverse) {
+    restored = applyInverse_(entry, index);
   } else {
     const snap = loadSnapshot_(opId);
     if (!snap) throw new Error('Snapshot missing — the history sheet may have been deleted.');
-    restoreSnapshot_(snap);
-    restored = snap.sheetName + '!' + snap.a1;
+    restoreSnapshot_(snap, entry.sheetName);
+    restored = entry.sheetName + '!' + snap.a1;
   }
   entry.undone = true;
   writeIndex_(index);

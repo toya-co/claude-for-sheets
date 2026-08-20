@@ -144,6 +144,11 @@ function readRange_(sheetName, a1) {
     truncated: truncated,
     values: values,
     formulas: range.getFormulas(),
+    // Merged blocks intersecting the range, as A1 strings. Without these the
+    // model sees a merged header as one value and a field of blanks, and
+    // writes into cells that do not visibly exist. Capped for payload safety.
+    merges: range.getMergedRanges().slice(0, 50)
+      .map(function (r) { return r.getA1Notation(); }),
     contextHash: hashValues_(values),
   };
 }

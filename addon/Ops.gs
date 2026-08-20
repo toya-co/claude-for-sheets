@@ -37,6 +37,36 @@ const VALUE_OPS = ['setValues', 'setFormulas', 'setFormats', 'clear'];
 const STRUCTURAL_OPS = ['insertRows', 'deleteRows', 'insertColumns', 'deleteColumns', 'addSheet', 'deleteSheet'];
 
 /**
+ * Range-scoped ops beyond plain writes. Same undo story as value ops — bounded
+ * to a rectangle, snapshot restores it — so they share the rectangle-overlap
+ * conflict rule. Merge additionally records the merges it displaced.
+ */
+const RANGE_OPS = ['mergeCells', 'unmergeCells', 'sortRange'];
+
+/**
+ * Layout ops change how the sheet *presents*, not what it holds: widths,
+ * heights, frozen panes, hidden spans, tab names and visibility. Each is
+ * invertible from a small record of prior state — no snapshot payload at all —
+ * and none destroys content, so none is ever gated. For undo conflicts they
+ * live on their own plane: two width changes to the same columns conflict;
+ * a width change and a value write never do.
+ */
+const LAYOUT_OPS = ['setColumnWidth', 'setRowHeight', 'freezePanes', 'renameSheet',
+                    'hideRows', 'showRows', 'hideColumns', 'showColumns',
+                    'hideSheet', 'showSheet'];
+
+/** "B" or 2 → 2. Sort specs arrive with whatever the model found natural. */
+function colNum_(v) {
+  if (typeof v === 'number') return v;
+  const s = String(v || '').trim().toUpperCase();
+  if (/^\d+$/.test(s)) return Number(s);
+  if (!/^[A-Z]+$/.test(s)) return NaN;
+  let n = 0;
+  for (let i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64);
+  return n;
+}
+
+/**
  * Resolve an op's target. Sheet by name for now; protocol.md prefers sheetId
  * because names are user-editable, and the model only ever sees names — so
  * accept both and prefer the ID when it is present.
@@ -98,12 +128,15 @@ function inspectOp_(ss, op) {
 
   // The history sheet holds the undo payloads. An op that touches it — from a
   // confused model or a hostile cell — would let an edit destroy its own undo.
-  if (op.sheetName === HISTORY_SHEET || op.name === HISTORY_SHEET) {
+  if (op.sheetName === HISTORY_SHEET || op.name === HISTORY_SHEET ||
+      op.newName === HISTORY_SHEET) {
     return { ok: false, type: op.type,
       error: { code: 'PROTECTED_SHEET', message: 'That sheet belongs to the undo history.' } };
   }
 
   if (STRUCTURAL_OPS.indexOf(op.type) !== -1) return inspectStructural_(ss, op, base);
+  if (LAYOUT_OPS.indexOf(op.type) !== -1) return inspectLayout_(ss, op, base);
+  if (RANGE_OPS.indexOf(op.type) !== -1) return inspectRangeOp_(ss, op, base);
 
   if (VALUE_OPS.indexOf(op.type) === -1) {
     return { ok: false, type: op.type,
@@ -243,6 +276,168 @@ function inspectStructural_(ss, op, base) {
   base.reason = "deletes the sheet '" + sheet.getName() + "' (" + occupied +
     ' cell' + (occupied === 1 ? '' : 's') + ' of content)' +
     (tooBig ? ' — TOO LARGE TO UNDO' : '');
+  return base;
+}
+
+/**
+ * How many cells would a merge destroy?
+ *
+ * merge() keeps only the top-left cell of the block and silently deletes the
+ * rest — mergeAcross keeps the first cell of each row, mergeVertically the
+ * first of each column. Like `clear`, it leaves nothing behind to notice, so
+ * any doomed content gates.
+ */
+function mergeDoomed_(values, formulas, mergeType) {
+  let n = 0;
+  for (let r = 0; r < values.length; r++) {
+    for (let c = 0; c < values[r].length; c++) {
+      const survives = mergeType === 'across' ? c === 0
+                     : mergeType === 'vertical' ? r === 0
+                     : (r === 0 && c === 0);
+      if (survives) continue;
+      const v = values[r][c];
+      if ((v !== '' && v !== null && v !== undefined) || formulas[r][c]) n++;
+    }
+  }
+  return n;
+}
+
+/**
+ * What would this range op destroy?
+ *
+ * Merging is gated like `clear` — it deletes every non-surviving cell that
+ * holds anything. Sorting destroys nothing (a permutation, and the snapshot
+ * restores it exactly), but formulas gate it: their relative references get
+ * rearranged, which can silently change what they compute. Unmerging destroys
+ * nothing and never asks.
+ */
+function inspectRangeOp_(ss, op, base) {
+  const sheet = opSheet_(ss, op);
+  if (!sheet) {
+    return { ok: false, type: op.type,
+      error: { code: 'SHEET_NOT_FOUND', message: 'No sheet named ' + op.sheetName } };
+  }
+  let range;
+  try { range = opRange_(sheet, op); } catch (e) {
+    return { ok: false, type: op.type,
+      error: { code: 'BAD_PAYLOAD', message: 'Bad range "' + op.a1 + '": ' + e.message } };
+  }
+  base.target = sheet.getName() + '!' + range.getA1Notation();
+  base.sheetName = sheet.getName();
+  base.a1 = range.getA1Notation();
+  base.destructive = false;
+  base.reason = '';
+
+  if (op.type === 'mergeCells') {
+    const mergeType = op.mergeType || 'all';
+    if (['all', 'across', 'vertical'].indexOf(mergeType) === -1) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: "mergeType must be 'all', 'across', or 'vertical'." } };
+    }
+    const doomed = mergeDoomed_(sanitizeGrid_(range.getValues()), range.getFormulas(), mergeType);
+    if (doomed > 0) {
+      base.destructive = true;
+      base.reason = 'merges away ' + doomed + ' cell' + (doomed === 1 ? '' : 's') +
+        ' of content (only the first cell of a merge survives)';
+    }
+    return base;
+  }
+
+  if (op.type === 'unmergeCells') {
+    if (!range.getMergedRanges().length) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'No merged cells in ' + base.target + '.' } };
+    }
+    return base;
+  }
+
+  // sortRange
+  const by = op.by;
+  if (!Array.isArray(by) || !by.length) {
+    return { ok: false, type: op.type,
+      error: { code: 'BAD_PAYLOAD', message: 'sortRange needs by: [{column, ascending}].' } };
+  }
+  const first = range.getColumn();
+  const last = first + range.getNumColumns() - 1;
+  for (let i = 0; i < by.length; i++) {
+    const col = colNum_(by[i] && by[i].column);
+    if (!col || isNaN(col) || col < first || col > last) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'Sort column ' + (by[i] && by[i].column) +
+          ' is outside ' + base.target + '.' } };
+    }
+  }
+  const formulas = countNonEmpty_(range.getFormulas());
+  if (formulas > 0) {
+    base.destructive = true;
+    base.reason = 'sorts a range holding ' + formulas + ' formula' + (formulas === 1 ? '' : 's') +
+      ', whose references will be rearranged';
+  }
+  return base;
+}
+
+/**
+ * Validate a layout op. None of them is ever destructive — they change
+ * presentation, not content, and each undoes exactly from its recorded prior
+ * state — so this is validation only.
+ */
+function inspectLayout_(ss, op, base) {
+  if (op.type !== 'renameSheet' && op.type !== 'hideSheet' && op.type !== 'showSheet' &&
+      op.type !== 'freezePanes') {
+    if (!op.index || op.index < 1) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'index must be 1 or greater.' } };
+    }
+  }
+
+  const sheet = opSheet_(ss, op);
+  if (!sheet) {
+    return { ok: false, type: op.type,
+      error: { code: 'SHEET_NOT_FOUND', message: 'No sheet named ' + op.sheetName } };
+  }
+  const name = sheet.getName();
+  base.destructive = false;
+  base.reason = '';
+  const count = Math.max(1, op.count || 1);
+  const span = count > 1 ? op.index + '-' + (op.index + count - 1) : String(op.index);
+
+  if (op.type === 'setColumnWidth' || op.type === 'setRowHeight') {
+    const size = op.type === 'setColumnWidth' ? op.width : op.height;
+    if (typeof size !== 'number' || size < 1 || size > 2000) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'Need a pixel size between 1 and 2000.' } };
+    }
+    base.target = name + '!' + (op.type === 'setColumnWidth' ? 'cols ' : 'rows ') + span;
+  } else if (op.type === 'freezePanes') {
+    if (op.rows === undefined && op.cols === undefined) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'freezePanes needs rows, cols, or both (0 unfreezes).' } };
+    }
+    base.target = name + '!frozen panes';
+  } else if (op.type === 'renameSheet') {
+    if (!op.newName || typeof op.newName !== 'string' || op.newName.length > 100) {
+      return { ok: false, type: op.type,
+        error: { code: 'BAD_PAYLOAD', message: 'renameSheet needs a newName under 100 characters.' } };
+    }
+    if (ss.getSheetByName(op.newName)) {
+      return { ok: false, type: op.type,
+        error: { code: 'SHEET_EXISTS', message: "A sheet named '" + op.newName + "' already exists." } };
+    }
+    base.target = "sheet '" + name + "' → '" + op.newName + "'";
+  } else if (op.type === 'hideSheet') {
+    const others = ss.getSheets().filter(function (s) {
+      return s.getName() !== name && s.getName() !== HISTORY_SHEET && !s.isSheetHidden();
+    });
+    if (!others.length) {
+      return { ok: false, type: op.type,
+        error: { code: 'LAST_SHEET', message: 'Cannot hide the only visible sheet.' } };
+    }
+    base.target = "sheet '" + name + "'";
+  } else if (op.type === 'showSheet') {
+    base.target = "sheet '" + name + "'";
+  } else {  // hideRows / showRows / hideColumns / showColumns
+    base.target = name + '!' + (/Rows$/.test(op.type) ? 'rows ' : 'cols ') + span;
+  }
   return base;
 }
 
@@ -389,9 +584,141 @@ function applyStructural_(ss, op, turnId) {
   };
 }
 
+/**
+ * Apply one already-gated range op.
+ *
+ * Sort rides the value-op undo path exactly: snapshot before, restore on undo,
+ * nothing else needed. Merge and unmerge record an inverse as well — undoing a
+ * merge is breakApart + restore + re-merge whatever the merge displaced, and
+ * undoing an unmerge is re-merging what it broke.
+ */
+function applyRangeOp_(ss, op, turnId) {
+  const sheet = opSheet_(ss, op);
+  const range = opRange_(sheet, op);
+  const opId = op.opId || newOpId_();
+  const target = sheet.getName() + '!' + range.getA1Notation();
+  let snapshot = null;
+  let extra = null;
+
+  if (op.type === 'sortRange') {
+    snapshot = snapshotRange_(sheet, range);
+    range.sort(op.by.map(function (s) {
+      return { column: colNum_(s.column), ascending: s.ascending !== false };
+    }));
+  } else if (op.type === 'mergeCells') {
+    snapshot = snapshotRange_(sheet, range);
+    const prior = range.getMergedRanges().map(function (r) { return r.getA1Notation(); });
+    const mergeType = op.mergeType || 'all';
+    if (mergeType === 'across') range.mergeAcross();
+    else if (mergeType === 'vertical') range.mergeVertically();
+    else range.merge();
+    extra = { sheetName: sheet.getName(),
+              inverse: { type: 'unmergeRestore', priorMerges: prior } };
+  } else {  // unmergeCells — values survive an unmerge, so no snapshot needed
+    const prior = range.getMergedRanges().map(function (r) { return r.getA1Notation(); });
+    range.breakApart();
+    extra = { sheetName: sheet.getName(), a1: range.getA1Notation(),
+              inverse: { type: 'remerge', ranges: prior } };
+  }
+
+  SpreadsheetApp.flush();
+  const recorded = recordHistory_(opId, op.type, target, snapshot, turnId, extra);
+  return {
+    ok: true,
+    opId: opId,
+    type: op.type,
+    applied: target,
+    restorable: recorded.restorable,
+    newContextHash: hashValues_(sanitizeGrid_(range.getValues())),
+  };
+}
+
+/**
+ * Apply one layout op, recording just enough prior state to undo it exactly.
+ *
+ * renameSheet additionally rewrites every history entry's sheetName from the
+ * old name to the new one. Without that, the rename orphans the whole history:
+ * every earlier entry points at a name that no longer exists, and every undo
+ * on this sheet fails. Coordinates are untouched by a rename, so the rewrite
+ * is lossless — and undoing the rename rewrites them back.
+ */
+function applyLayout_(ss, op, turnId) {
+  const opId = op.opId || newOpId_();
+  const sheet = opSheet_(ss, op);
+  let entrySheetName = sheet.getName();
+  const count = Math.max(1, op.count || 1);
+  const span = count > 1 ? op.index + '-' + (op.index + count - 1) : String(op.index);
+  let target, inverse, layout;
+
+  if (op.type === 'setColumnWidth') {
+    const widths = [];
+    for (let c = op.index; c < op.index + count; c++) {
+      widths.push({ index: c, width: sheet.getColumnWidth(c) });
+      sheet.setColumnWidth(c, op.width);
+    }
+    target = entrySheetName + '!cols ' + span + ' → ' + op.width + 'px';
+    inverse = { type: 'layout', kind: 'colwidth', widths: widths };
+    layout = { kind: 'colwidth', index: op.index, count: count };
+  } else if (op.type === 'setRowHeight') {
+    const heights = [];
+    for (let r = op.index; r < op.index + count; r++) {
+      heights.push({ index: r, height: sheet.getRowHeight(r) });
+      sheet.setRowHeight(r, op.height);
+    }
+    target = entrySheetName + '!rows ' + span + ' → ' + op.height + 'px';
+    inverse = { type: 'layout', kind: 'rowheight', heights: heights };
+    layout = { kind: 'rowheight', index: op.index, count: count };
+  } else if (op.type === 'freezePanes') {
+    inverse = { type: 'layout', kind: 'freeze',
+                rows: sheet.getFrozenRows(), cols: sheet.getFrozenColumns() };
+    if (op.rows !== undefined) sheet.setFrozenRows(op.rows);
+    if (op.cols !== undefined) sheet.setFrozenColumns(op.cols);
+    target = entrySheetName + '!frozen: ' + sheet.getFrozenRows() + ' row' +
+      (sheet.getFrozenRows() === 1 ? '' : 's') + ', ' + sheet.getFrozenColumns() + ' col' +
+      (sheet.getFrozenColumns() === 1 ? '' : 's');
+    layout = { kind: 'freeze' };
+  } else if (op.type === 'renameSheet') {
+    const from = entrySheetName;
+    sheet.setName(op.newName);
+    const index = readIndex_();
+    index.forEach(function (e) { if (e.sheetName === from) e.sheetName = op.newName; });
+    writeIndex_(index);
+    entrySheetName = op.newName;
+    target = "sheet '" + from + "' → '" + op.newName + "'";
+    inverse = { type: 'layout', kind: 'rename', to: from };
+    layout = { kind: 'rename' };
+  } else if (op.type === 'hideSheet' || op.type === 'showSheet') {
+    inverse = { type: 'layout', kind: 'sheetvis', hidden: sheet.isSheetHidden() };
+    if (op.type === 'hideSheet') sheet.hideSheet(); else sheet.showSheet();
+    target = "sheet '" + entrySheetName + "'";
+    layout = { kind: 'sheetvis' };
+  } else {  // hideRows / showRows / hideColumns / showColumns
+    const rows = /Rows$/.test(op.type);
+    const spans = [];
+    for (let i = op.index; i < op.index + count; i++) {
+      spans.push({ index: i,
+        hidden: rows ? sheet.isRowHiddenByUser(i) : sheet.isColumnHiddenByUser(i) });
+    }
+    if (op.type === 'hideRows') sheet.hideRows(op.index, count);
+    else if (op.type === 'showRows') sheet.showRows(op.index, count);
+    else if (op.type === 'hideColumns') sheet.hideColumns(op.index, count);
+    else sheet.showColumns(op.index, count);
+    target = entrySheetName + '!' + (rows ? 'rows ' : 'cols ') + span;
+    inverse = { type: 'layout', kind: rows ? 'rowshidden' : 'colshidden', spans: spans };
+    layout = { kind: rows ? 'rowhidden' : 'colhidden', index: op.index, count: count };
+  }
+
+  SpreadsheetApp.flush();
+  const recorded = recordHistory_(opId, op.type, target, null, turnId,
+    { sheetName: entrySheetName, layout: layout, inverse: inverse });
+  return { ok: true, opId: opId, type: op.type, applied: target, restorable: recorded.restorable };
+}
+
 /** Apply one already-gated op. Assumes inspection and confirmation happened. */
 function applyOne_(ss, op, turnId) {
   if (STRUCTURAL_OPS.indexOf(op.type) !== -1) return applyStructural_(ss, op, turnId);
+  if (LAYOUT_OPS.indexOf(op.type) !== -1) return applyLayout_(ss, op, turnId);
+  if (RANGE_OPS.indexOf(op.type) !== -1) return applyRangeOp_(ss, op, turnId);
   const sheet = opSheet_(ss, op);
   const range = opRange_(sheet, op);
   const opId = op.opId || newOpId_();
@@ -418,6 +745,11 @@ function applyOne_(ss, op, turnId) {
     if (f.italic !== undefined) range.setFontStyle(f.italic ? 'italic' : 'normal');
     if (f.numberFormat) range.setNumberFormat(f.numberFormat);
     if (f.align) range.setHorizontalAlignment(f.align);
+    if (f.fontSize) range.setFontSize(f.fontSize);
+    if (f.fontFamily) range.setFontFamily(f.fontFamily);
+    if (f.wrap !== undefined) range.setWrap(Boolean(f.wrap));
+    if (f.verticalAlign) range.setVerticalAlignment(f.verticalAlign);
+    if (f.fontLine) range.setFontLine(f.fontLine);
   } else if (op.type === 'clear') {
     const what = op.what || 'all';
     if (what === 'values') range.clearContent();

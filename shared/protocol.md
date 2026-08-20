@@ -4,8 +4,8 @@ The contract between the sidebar and Apps Script. Both halves of the repo depend
 on it, which is why it lives here rather than inside either one.
 
 **The live transport is the MCP tool loop** (`daemon/src/mcp-bridge.js`): Claude
-calls `read_range` / `set_values` / `set_formulas` / `set_formats` /
-`clear_range`, and the sidebar translates each 1:1 into the ops below and
+calls tools named 1:1 after the ops below (`read_range`, `set_values`,
+`merge_cells`, `sort_range`, …), and the sidebar translates each into an op and
 executes it. The envelope, the gate, and undo semantics in this file are
 unchanged by that — tools are a delivery mechanism for ops, not a second
 protocol.
@@ -127,12 +127,63 @@ Bounded to a range. Invertible by snapshotting that range before writing.
 
 `setFormats` takes **one format object applied to the whole range**, not a grid
 per property. A model emits that reliably; parallel 2-D arrays of backgrounds and
-font weights it does not. Snapshots still capture the full per-cell formatting,
-so an undo restores exactly what was there.
+font weights it does not. The format object accepts `background`, `fontColor`,
+`bold`, `italic`, `numberFormat`, `align`, `fontSize`, `fontFamily`, `wrap`,
+`verticalAlign`, and `fontLine` (`underline` | `line-through` | `none`).
+Snapshots still capture the full per-cell formatting, so an undo restores
+exactly what was there.
 
 A snapshot captures **values, formulas, and formats together**. Restoring values
 alone leaves the sheet visibly wrong, and that gap is the specific weakness in
 the competing product.
+
+## Range ops
+
+Range-scoped like the value ops, and undone the same way — a snapshot of the
+rectangle — so they share the rectangle-overlap conflict rule for undo.
+
+| `type` | Payload | Gate |
+|---|---|---|
+| `mergeCells` | `{a1, mergeType: "all" \| "across" \| "vertical"}` | Asks when merging would destroy any content: only the first cell of each merged block survives, like `clear`, it leaves nothing behind to notice |
+| `unmergeCells` | `{a1}` | Never — no values are lost |
+| `sortRange` | `{a1, by: [{column, ascending}]}` | Asks when the range holds formulas — sorting rearranges their relative references, which can silently change results |
+
+`sortRange` columns are absolute sheet columns (letter or 1-based number) and
+must fall inside the range. Sorting is a permutation — nothing is destroyed —
+and the snapshot restores the exact original order. A merge records the merged
+blocks it absorbed; its undo is breakApart, restore the snapshot, then re-merge
+what was there before. An unmerge records what it broke and re-merges it on undo.
+
+## Layout ops
+
+Presentation, not content: widths, heights, frozen panes, hidden spans, tab
+names and visibility. Each records just enough prior state to undo exactly, no
+snapshot payload. **None is ever gated** — nothing is destroyed and every one
+restores cleanly.
+
+| `type` | Payload | Inverse |
+|---|---|---|
+| `setColumnWidth` | `{index, count, width}` | prior width per column |
+| `setRowHeight` | `{index, count, height}` | prior height per row |
+| `freezePanes` | `{rows?, cols?}` (0 unfreezes) | prior frozen counts |
+| `renameSheet` | `{newName}` | rename back |
+| `hideRows` / `showRows` | `{index, count}` | prior per-row hidden state |
+| `hideColumns` / `showColumns` | `{index, count}` | prior per-column hidden state |
+| `hideSheet` / `showSheet` | — | prior visibility |
+
+**`renameSheet` rewrites the history index** — every entry on the renamed sheet
+follows it to the new name, and undoing the rename rewrites them back. Without
+that, a rename orphans the entire history: every older entry points at a name
+that no longer resolves, and every undo on that sheet fails. Snapshot payloads
+are not rewritten (that would be a full history rewrite); restore uses the
+index entry's current name and treats the payload's stored name as a fallback.
+
+**Layout entries conflict on their own plane.** They never disturb cell
+content, so a width change does not block a value undo or vice versa. A layout
+undo is refused only when a later layout entry of the *same kind* overlaps its
+span (two width changes to the same columns), and structural ops still conflict
+with everything on their sheet — an inserted column shifts what every recorded
+width index means.
 
 ## Structural ops
 
@@ -243,9 +294,15 @@ Oversized payloads fail the same silent way, so context reads are capped at
 ## Status
 
 Implemented: `getContext`, `inspectOps`, `applyOps`, `undoOp`, `getHistory`, and
-`applyOp` as a one-op convenience over `applyOps`. All four value ops and all
-six structural ops work, with the gate, the guard, and inverse-op undo. The
-hidden history sheet is protected from every op type (`PROTECTED_SHEET`).
+`applyOp` as a one-op convenience over `applyOps`. All four value ops, all six
+structural ops, all three range ops, and all ten layout ops work, with the
+gate, the guard, and inverse-op undo. The hidden history sheet is protected
+from every op type (`PROTECTED_SHEET`). Context reads report merged blocks.
+
+Not yet ops at all (the model's prompt says so, so it declines honestly):
+borders (Apps Script can write but not *read* them, so honest undo needs the
+Advanced Sheets API — Tier 2), conditional formatting, data validation, notes,
+named ranges, charts, pivot tables, protected ranges.
 
 Mid-turn conflict detection is live: range hash plus the `onEdit` watermark,
 carried on every write and refreshed after each.

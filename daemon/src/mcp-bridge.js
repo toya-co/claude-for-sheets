@@ -40,10 +40,11 @@ const GRID = { type: 'array', items: { type: 'array' } };
 const TOOLS = [
   {
     name: 'read_range',
-    description: 'Read a range from the spreadsheet: values, formulas, and the '
-      + 'tab manifest. Omit a1 to read the data region of the sheet; omit both '
-      + 'arguments for the active sheet. Large ranges are truncated — the result '
-      + 'says so. Read before you write when you are not certain what a range holds.',
+    description: 'Read a range from the spreadsheet: values, formulas, merged '
+      + 'blocks, and the tab manifest. Omit a1 to read the data region of the '
+      + 'sheet; omit both arguments for the active sheet. Large ranges are '
+      + 'truncated — the result says so. Read before you write when you are not '
+      + 'certain what a range holds.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -87,7 +88,9 @@ const TOOLS = [
     name: 'set_formats',
     description: 'Format a range. One format object applied to the whole range: '
       + '{background, fontColor ("#rrggbb"), bold, italic, numberFormat '
-      + '(e.g. "0.00", "$#,##0"), align ("left"|"center"|"right")}.',
+      + '(e.g. "0.00", "$#,##0"), align ("left"|"center"|"right"), fontSize '
+      + '(points), fontFamily (e.g. "Roboto"), wrap (true/false), verticalAlign '
+      + '("top"|"middle"|"bottom"), fontLine ("underline"|"line-through"|"none")}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -183,6 +186,178 @@ const TOOLS = [
     name: 'delete_sheet',
     description: 'Delete a whole tab. ALWAYS asks the user first. Undoable '
       + 'unless the sheet is too large to snapshot — the confirmation says so.',
+    inputSchema: {
+      type: 'object',
+      properties: { sheetName: { type: 'string' } },
+      required: ['sheetName'],
+    },
+  },
+  {
+    name: 'merge_cells',
+    description: 'Merge a range into one cell (mergeType "all", the default), '
+      + 'one cell per row ("across"), or one per column ("vertical"). Only the '
+      + 'first cell of each merged block keeps its value — merging over content '
+      + 'asks the user first. Undoable.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        a1: { type: 'string' },
+        mergeType: { type: 'string', enum: ['all', 'across', 'vertical'] },
+      },
+      required: ['sheetName', 'a1'],
+    },
+  },
+  {
+    name: 'unmerge_cells',
+    description: 'Unmerge every merged block in the range. No values are lost. '
+      + 'Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: { sheetName: { type: 'string' }, a1: { type: 'string' } },
+      required: ['sheetName', 'a1'],
+    },
+  },
+  {
+    name: 'sort_range',
+    description: 'Sort the rows of a range by one or more of its columns. '
+      + 'by is a list like [{"column": "B", "ascending": false}] — columns as '
+      + 'letters or 1-based sheet numbers, and they must fall inside the range. '
+      + 'Exclude the header row from the range. Asks first if the range holds '
+      + 'formulas, whose references would be rearranged. Undoable.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        a1: { type: 'string' },
+        by: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['sheetName', 'a1', 'by'],
+    },
+  },
+  {
+    name: 'set_column_width',
+    description: 'Set the pixel width of count columns (default 1) starting at '
+      + 'the 1-based column NUMBER (A=1). Default width is 100. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        index: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+        width: { type: 'integer', minimum: 1 },
+      },
+      required: ['sheetName', 'index', 'width'],
+    },
+  },
+  {
+    name: 'set_row_height',
+    description: 'Set the pixel height of count rows (default 1) starting at the '
+      + '1-based row index. Default height is 21. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        index: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+        height: { type: 'integer', minimum: 1 },
+      },
+      required: ['sheetName', 'index', 'height'],
+    },
+  },
+  {
+    name: 'freeze_panes',
+    description: 'Freeze the first N rows and/or columns so they stay visible '
+      + 'while scrolling. Pass rows, cols, or both; 0 unfreezes. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        rows: { type: 'integer', minimum: 0 },
+        cols: { type: 'integer', minimum: 0 },
+      },
+      required: ['sheetName'],
+    },
+  },
+  {
+    name: 'rename_sheet',
+    description: 'Rename a tab. The edit history follows the sheet to its new '
+      + 'name. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: { sheetName: { type: 'string' }, newName: { type: 'string' } },
+      required: ['sheetName', 'newName'],
+    },
+  },
+  {
+    name: 'hide_rows',
+    description: 'Hide count rows (default 1) starting at the 1-based index. '
+      + 'Hidden rows keep their data and keep computing. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        index: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+      },
+      required: ['sheetName', 'index'],
+    },
+  },
+  {
+    name: 'show_rows',
+    description: 'Unhide count rows (default 1) starting at the 1-based index. '
+      + 'Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        index: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+      },
+      required: ['sheetName', 'index'],
+    },
+  },
+  {
+    name: 'hide_columns',
+    description: 'Hide count columns (default 1) starting at the 1-based column '
+      + 'NUMBER (A=1). Hidden columns keep their data. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        index: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+      },
+      required: ['sheetName', 'index'],
+    },
+  },
+  {
+    name: 'show_columns',
+    description: 'Unhide count columns (default 1) starting at the 1-based '
+      + 'column NUMBER (A=1). Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheetName: { type: 'string' },
+        index: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+      },
+      required: ['sheetName', 'index'],
+    },
+  },
+  {
+    name: 'hide_sheet',
+    description: 'Hide a whole tab (it stays in the file and can be shown '
+      + 'again). At least one sheet must stay visible. Never asks.',
+    inputSchema: {
+      type: 'object',
+      properties: { sheetName: { type: 'string' } },
+      required: ['sheetName'],
+    },
+  },
+  {
+    name: 'show_sheet',
+    description: 'Unhide a hidden tab. Never asks.',
     inputSchema: {
       type: 'object',
       properties: { sheetName: { type: 'string' } },

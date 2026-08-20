@@ -162,6 +162,32 @@
                                   verb: 'adding sheet', where: a.name }),
         delete_sheet:   (a) => ({ op: { type: 'deleteSheet', sheetName: a.sheetName },
                                   verb: 'deleting sheet', where: a.sheetName }),
+        merge_cells:    (a) => ({ op: { type: 'mergeCells', sheetName: a.sheetName, a1: a.a1, mergeType: a.mergeType || 'all' },
+                                  verb: 'merging', where: a.sheetName + '!' + a.a1 }),
+        unmerge_cells:  (a) => ({ op: { type: 'unmergeCells', sheetName: a.sheetName, a1: a.a1 },
+                                  verb: 'unmerging', where: a.sheetName + '!' + a.a1 }),
+        sort_range:     (a) => ({ op: { type: 'sortRange', sheetName: a.sheetName, a1: a.a1, by: a.by },
+                                  verb: 'sorting', where: a.sheetName + '!' + a.a1 }),
+        set_column_width: (a) => ({ op: { type: 'setColumnWidth', sheetName: a.sheetName, index: a.index, count: a.count || 1, width: a.width },
+                                  verb: 'resizing', where: a.sheetName + '!cols ' + span(a) }),
+        set_row_height: (a) => ({ op: { type: 'setRowHeight', sheetName: a.sheetName, index: a.index, count: a.count || 1, height: a.height },
+                                  verb: 'resizing', where: a.sheetName + '!rows ' + span(a) }),
+        freeze_panes:   (a) => ({ op: { type: 'freezePanes', sheetName: a.sheetName, rows: a.rows, cols: a.cols },
+                                  verb: 'freezing panes', where: a.sheetName }),
+        rename_sheet:   (a) => ({ op: { type: 'renameSheet', sheetName: a.sheetName, newName: a.newName },
+                                  verb: 'renaming', where: a.sheetName + ' → ' + a.newName }),
+        hide_rows:      (a) => ({ op: { type: 'hideRows', sheetName: a.sheetName, index: a.index, count: a.count || 1 },
+                                  verb: 'hiding', where: a.sheetName + '!rows ' + span(a) }),
+        show_rows:      (a) => ({ op: { type: 'showRows', sheetName: a.sheetName, index: a.index, count: a.count || 1 },
+                                  verb: 'unhiding', where: a.sheetName + '!rows ' + span(a) }),
+        hide_columns:   (a) => ({ op: { type: 'hideColumns', sheetName: a.sheetName, index: a.index, count: a.count || 1 },
+                                  verb: 'hiding', where: a.sheetName + '!cols ' + span(a) }),
+        show_columns:   (a) => ({ op: { type: 'showColumns', sheetName: a.sheetName, index: a.index, count: a.count || 1 },
+                                  verb: 'unhiding', where: a.sheetName + '!cols ' + span(a) }),
+        hide_sheet:     (a) => ({ op: { type: 'hideSheet', sheetName: a.sheetName },
+                                  verb: 'hiding sheet', where: a.sheetName }),
+        show_sheet:     (a) => ({ op: { type: 'showSheet', sheetName: a.sheetName },
+                                  verb: 'unhiding sheet', where: a.sheetName }),
       };
 
       function postOpResult(callId, result) {
@@ -195,6 +221,7 @@
                 truncated: c.active.truncated,
                 values: c.active.values,
                 formulas: c.active.formulas,
+                merges: c.active.merges,
               });
             })
             .withFailureHandler((err) => {
@@ -311,6 +338,14 @@
              : type === 'deleteRows' || type === 'deleteColumns' ? 'deleted'
              : type === 'addSheet' ? 'added'
              : type === 'deleteSheet' ? 'deleted'
+             : type === 'mergeCells' ? 'merged'
+             : type === 'unmergeCells' ? 'unmerged'
+             : type === 'sortRange' ? 'sorted'
+             : type === 'setColumnWidth' || type === 'setRowHeight' ? 'resized'
+             : type === 'freezePanes' ? 'froze'
+             : type === 'renameSheet' ? 'renamed'
+             : type === 'hideRows' || type === 'hideColumns' || type === 'hideSheet' ? 'hid'
+             : type === 'showRows' || type === 'showColumns' || type === 'showSheet' ? 'unhid'
              : 'wrote';
       }
 

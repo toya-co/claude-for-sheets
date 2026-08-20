@@ -31,7 +31,11 @@ test('the tool vocabulary maps 1:1 onto the op protocol', async () => {
   assert.deepStrictEqual(names,
     ['read_range', 'set_values', 'set_formulas', 'set_formats', 'clear_range',
      'insert_rows', 'delete_rows', 'insert_columns', 'delete_columns',
-     'add_sheet', 'delete_sheet']);
+     'add_sheet', 'delete_sheet',
+     'merge_cells', 'unmerge_cells', 'sort_range',
+     'set_column_width', 'set_row_height', 'freeze_panes', 'rename_sheet',
+     'hide_rows', 'show_rows', 'hide_columns', 'show_columns',
+     'hide_sheet', 'show_sheet']);
   for (const t of res.result.tools) {
     assert.ok(t.description.length > 20, t.name + ' explains itself to the model');
     assert.strictEqual(t.inputSchema.type, 'object', t.name + ' has a schema');
@@ -50,6 +54,18 @@ test('every write tool requires its target and payload', async () => {
   assert.deepStrictEqual(byName.delete_columns.inputSchema.required, ['sheetName', 'index']);
   assert.deepStrictEqual(byName.add_sheet.inputSchema.required, ['name']);
   assert.deepStrictEqual(byName.delete_sheet.inputSchema.required, ['sheetName']);
+  assert.deepStrictEqual(byName.merge_cells.inputSchema.required, ['sheetName', 'a1']);
+  assert.deepStrictEqual(byName.unmerge_cells.inputSchema.required, ['sheetName', 'a1']);
+  assert.deepStrictEqual(byName.sort_range.inputSchema.required, ['sheetName', 'a1', 'by']);
+  assert.deepStrictEqual(byName.set_column_width.inputSchema.required, ['sheetName', 'index', 'width']);
+  assert.deepStrictEqual(byName.set_row_height.inputSchema.required, ['sheetName', 'index', 'height']);
+  assert.deepStrictEqual(byName.freeze_panes.inputSchema.required, ['sheetName']);
+  assert.deepStrictEqual(byName.rename_sheet.inputSchema.required, ['sheetName', 'newName']);
+  for (const t of ['hide_rows', 'show_rows', 'hide_columns', 'show_columns']) {
+    assert.deepStrictEqual(byName[t].inputSchema.required, ['sheetName', 'index'], t);
+  }
+  assert.deepStrictEqual(byName.hide_sheet.inputSchema.required, ['sheetName']);
+  assert.deepStrictEqual(byName.show_sheet.inputSchema.required, ['sheetName']);
   assert.ok(!byName.read_range.inputSchema.required, 'read_range args are all optional');
 });
 
