@@ -58,14 +58,20 @@ Requests time out unapproved after three minutes.
 
 This is a spreadsheet editor, not a coding agent, so every invocation strips what
 the CLI would otherwise inherit: `--system-prompt` replaces the coding prompt,
-`--strict-mcp-config` drops MCP servers, `--disallowedTools` removes every local
-tool, and cwd is a neutral `~/.claude-sheets/workspace` so no `CLAUDE.md` is
-discovered.
+`--strict-mcp-config` drops MCP servers, `--tools ""` removes every tool, and cwd
+is a neutral `~/.claude-sheets/workspace` so no `CLAUDE.md` is discovered.
 
 Claude has **no tools at all** here. It proposes sheet operations; the sidebar
 executes them via Apps Script. So a prompt injection hidden in a cell cannot
 reach your filesystem — worst case is one spreadsheet, which the undo history
 covers.
+
+**`--tools ""` and never a denylist.** This was `--disallowedTools` naming ten
+tools, and a live `init` line showed eighteen others still available, including
+`CronCreate`, `Workflow`, and `SendMessage`. A denylist excludes only what
+existed when it was written. `daemon/test/isolation.test.js` fails if anyone
+reintroduces one; the CLI-side proof is `init` reporting `tools: []`, which is
+worth re-checking after a Claude Code upgrade.
 
 **Hooks are the exception.** They fire regardless of cwd and regardless of
 `--settings '{"hooks":{}}'` (that flag merges, it does not replace). `--bare`

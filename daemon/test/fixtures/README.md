@@ -22,6 +22,12 @@ failed". It also shows the reason living in `errors[]` rather than `result`.
 
 Recorded against **Claude Code 2.1.236**, 2026-08-19.
 
+Note that these were captured while the daemon still passed `--disallowedTools`,
+so their `init` lines list eighteen tools as available. That is the bug those
+recordings helped find, not the current behavior — the daemon now passes
+`--tools ""` and `init` reports `tools: []`. The parser tests do not read that
+field, so the fixtures were not re-recorded to hide the evidence.
+
 ## Re-recording
 
 Do this when the CLI updates and a test starts failing. Run from

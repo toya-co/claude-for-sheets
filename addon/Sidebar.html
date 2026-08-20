@@ -128,8 +128,15 @@
           opId: 'op_' + Date.now() + '_' + i + '_' + Math.floor(Math.random() * 1e6),
         }));
       }
+      // Removing a block leaves the blank lines that surrounded it, which renders
+      // as a large empty gap under `white-space: pre-wrap` — it reads as a broken
+      // message. Collapse the hole rather than just deleting the block.
       function stripOps(text) {
-        return text.replace(/```sheetop[\s\S]*?```/g, '').trim();
+        return text
+          .replace(/```sheetop[\s\S]*?```/g, '\u0000')
+          .replace(/\s*\u0000\s*/g, '\n\n')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
       }
 
       // ---- apply a turn's ops through Apps Script ---------------------------

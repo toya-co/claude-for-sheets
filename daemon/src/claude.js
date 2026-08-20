@@ -256,41 +256,59 @@ function createParser_(emit) {
  * user should never be told "no conversation found" about a session they never
  * knew existed.
  */
+/**
+ * The argument list for one invocation.
+ *
+ * Split out and exported so the isolation flags can be asserted in a test. They
+ * are a security boundary, not a preference, and the failure mode of getting
+ * them wrong is silent.
+ */
+function buildArgs_(prompt, opts, sessionId, resuming) {
+  const args = [
+    '-p', prompt,
+    '--output-format', 'stream-json',
+    '--include-partial-messages',
+    '--verbose',
+
+    // --- conversation -----------------------------------------------------
+    // One persisted session per spreadsheet, which is both halves of M4.5:
+    // Claude remembers the previous turn, and the ~25k CLI baseline is read
+    // from cache rather than re-created every turn. The session lives in the
+    // project bucket for the workspace cwd, so it stays out of the user's
+    // coding session history.
+    ...(resuming ? ['--resume', sessionId] : ['--session-id', sessionId]),
+
+    // --- isolation --------------------------------------------------------
+    // This is a spreadsheet editor, not a coding agent. Everything the CLI
+    // would inherit from the user's development environment is stripped:
+    // wrong context, wasted tokens, and hooks or MCP servers that can misfire
+    // on work that has nothing to do with code.
+
+    // Replace the coding-agent system prompt outright.
+    '--system-prompt', opts.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+
+    // No MCP servers, regardless of what the user has configured globally.
+    '--strict-mcp-config',
+
+    // No tools at all. Claude never touches anything outside the spreadsheet:
+    // it proposes sheet operations, and the *sidebar* executes them through
+    // Apps Script. That is what keeps a prompt injection hidden in a cell
+    // confined to one spreadsheet.
+    //
+    // This MUST stay an allowlist of nothing rather than a denylist. It was a
+    // denylist naming ten tools, which silently failed open: a live init line
+    // reported eighteen others still available, including CronCreate, Workflow,
+    // SendMessage, and Skill. A denylist can only exclude the tools that
+    // existed when it was written, and this CLI is not ours to freeze.
+    '--tools', '',
+  ];
+  if (opts.model) args.push('--model', opts.model);
+  return args;
+}
+
 function attempt_(prompt, emit, opts, sessionId, resuming) {
   return new Promise((resolve) => {
-    const args = [
-      '-p', prompt,
-      '--output-format', 'stream-json',
-      '--include-partial-messages',
-      '--verbose',
-
-      // --- conversation ---------------------------------------------------
-      // One persisted session per spreadsheet, which is both halves of M4.5:
-      // Claude remembers the previous turn, and the ~25k CLI baseline is read
-      // from cache rather than re-created every turn. The session lives in the
-      // project bucket for the workspace cwd below, so it stays out of the
-      // user's coding session history.
-      ...(resuming ? ['--resume', sessionId] : ['--session-id', sessionId]),
-
-      // --- isolation ------------------------------------------------------
-      // This is a spreadsheet editor, not a coding agent. Everything the CLI
-      // would inherit from the user's development environment is stripped:
-      // wrong context, wasted tokens, and hooks or MCP servers that can misfire
-      // on work that has nothing to do with code.
-
-      // Replace the coding-agent system prompt outright.
-      '--system-prompt', opts.systemPrompt || DEFAULT_SYSTEM_PROMPT,
-
-      // No MCP servers, regardless of what the user has configured globally.
-      '--strict-mcp-config',
-
-      // No local tools at all. Claude never touches the filesystem: it proposes
-      // sheet operations, and the *sidebar* executes them through Apps Script.
-      // That keeps the blast radius of a prompt injection inside one spreadsheet.
-      '--disallowedTools',
-      'Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit',
-    ];
-    if (opts.model) args.push('--model', opts.model);
+    const args = buildArgs_(prompt, opts, sessionId, resuming);
 
     const cli = resolveCli_();
     if (!cli) {
@@ -403,4 +421,4 @@ function checkCli() {
   });
 }
 
-module.exports = { runTurn, checkCli, createParser_, extractPartialText_, extractMessageText_ };
+module.exports = { runTurn, checkCli, buildArgs_, createParser_, extractPartialText_, extractMessageText_ };
