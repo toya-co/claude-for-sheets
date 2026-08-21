@@ -12,7 +12,20 @@
  */
 
 const CLIENT = `
-const $ = (id) => document.getElementById(id);
+/**
+ * Element by id, but LOUD when it is missing.
+ *
+ * A bare getElementById returns null and the failure surfaces later as
+ * "cannot set properties of null", which names neither the element nor the
+ * function that wanted it. Naming the id turns a hunt into a read.
+ */
+const $ = (id) => {
+  const el = document.getElementById(id);
+  if (!el) throw new Error('missing element #' + id);
+  return el;
+};
+/** Same, but for things that legitimately may not be on the page yet. */
+const $maybe = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s)
   .replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -262,7 +275,9 @@ function renderAll() {
 }
 
 function trouble(headline, detail) {
-  $('statusbar').innerHTML =
+  const bar = $maybe('statusbar');
+  if (!bar) return console.error(headline, detail);
+  bar.innerHTML =
     '<span class="dot off"></span>' +
     '<strong style="font-family:var(--sans);font-weight:600">' + headline + '</strong>' +
     '<span class="sep">\u00b7</span><span>' + detail + '</span>';
@@ -321,8 +336,10 @@ document.addEventListener('click', async (e) => {
     return refresh();
   }
   if (b.dataset.saveins !== undefined) {
+    const box = $maybe('sheetIns');
+    if (!box) return;   // drawer closed underneath the click; nothing to save
     await post('/instructions', { scope: 'sheet', spreadsheetId: b.dataset.saveins,
-                                  text: $('sheetIns').value });
+                                  text: box.value });
     return refresh();
   }
   if (b.dataset.reset !== undefined) {

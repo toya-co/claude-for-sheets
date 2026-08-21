@@ -19,6 +19,16 @@ const { TOOLS } = require('../src/mcp-bridge');
 
 const HTML = dashboard.page('test-token-value');
 
+/**
+ * The page WITHOUT its script block.
+ *
+ * The client script is embedded in the page and its source contains id="..."
+ * literals for markup it builds at runtime. Checking ids against the whole
+ * page therefore matched the script quoting itself — which is exactly how a
+ * reference to an element that never exists at render time got through.
+ */
+const MARKUP = HTML.replace(/<script>[\s\S]*?<\/script>/g, '');
+
 const stripComments = (src) => src
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/(?<!:)\/\/.*$/gm, '');
@@ -86,8 +96,10 @@ test('every element the script reaches for exists in the markup', () => {
   const re = /\$\('([A-Za-z0-9_-]+)'\)/g;
   while ((m = re.exec(CLIENT)) !== null) ids.add(m[1]);
 
-  const missing = [...ids].filter((id) => !HTML.includes('id="' + id + '"')).sort();
-  assert.deepStrictEqual(missing, [], 'referenced but not in the page: ' + missing.join(', '));
+  const missing = [...ids].filter((id) => !MARKUP.includes('id="' + id + '"')).sort();
+  assert.deepStrictEqual(missing, [],
+    'referenced with $() but not in the markup: ' + missing.join(', ') +
+    ' — use $maybe() if it is built at runtime');
 });
 
 test('every data-action button the script handles is rendered somewhere', () => {
@@ -100,7 +112,7 @@ test('every data-action button the script handles is rendered somewhere', () => 
       'nothing handles data-' + key);
   }
   for (const id of ['saveGlobal', 'quitApp', 'copyDiag', 'rawStatus']) {
-    assert.ok(HTML.includes('id="' + id + '"'), id + ' is rendered');
+    assert.ok(MARKUP.includes('id="' + id + '"'), id + ' is rendered');
     assert.ok(CLIENT.includes("'" + id + "'"), id + ' is handled');
   }
 });
@@ -191,6 +203,14 @@ test('a whole spreadsheet row opens its drawer, by mouse and by keyboard', () =>
   // controls, so button handling has to run before row handling.
   assert.ok(CLIENT.indexOf("closest('button')") < CLIENT.indexOf("closest('[data-card]')"),
     'buttons are handled before the row');
+});
+
+test('a missing element names itself instead of failing anonymously', () => {
+  // "Cannot set properties of null" names neither the element nor the caller.
+  assert.ok(/throw new Error\('missing element #' \+ id\)/.test(CLIENT),
+    '$() must name what it could not find');
+  assert.ok(/const \$maybe = /.test(CLIENT),
+    'and there must be a way to ask for something optional');
 });
 
 test('polling backs off when the tab is hidden', () => {
