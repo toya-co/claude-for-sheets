@@ -261,16 +261,41 @@ function renderAll() {
   renderActivity(); renderSettings(); renderSetup(); renderDiag();
 }
 
+function trouble(headline, detail) {
+  $('statusbar').innerHTML =
+    '<span class="dot off"></span>' +
+    '<strong style="font-family:var(--sans);font-weight:600">' + headline + '</strong>' +
+    '<span class="sep">\u00b7</span><span>' + detail + '</span>';
+}
+
+/**
+ * Fetch and render are caught SEPARATELY on purpose.
+ *
+ * One catch around both cannot tell "the app stopped" from "this page has a
+ * bug", and it reported the first for every case of the second -- sending you
+ * to restart a daemon that was serving fine. A render fault is ours: say so,
+ * and name it.
+ */
 async function refresh() {
+  let next;
   try {
-    const r = await fetch('/status');
-    state = await r.json();
+    const r = await fetch('/status', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    next = await r.json();
+  } catch (e) {
+    return trouble('Not responding',
+      'The local app is not answering (' + esc(e.message) + '). ' +
+      'Restart it with <code>npm start</code>.');
+  }
+
+  state = next;
+  try {
     renderAll();
   } catch (e) {
-    $('statusbar').innerHTML =
-      '<span class="dot off"></span><strong style="font-family:var(--sans)">Not responding</strong>' +
-      '<span class="sep">\\u00b7</span><span>The local app may have stopped. ' +
-      'Restart it with <code>npm start</code>.</span>';
+    console.error('dashboard render failed', e);
+    trouble('Page error',
+      'The app is fine \u2014 this page failed to draw: ' + esc(e.message) +
+      '. Reload, and check the browser console.');
   }
 }
 
