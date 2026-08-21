@@ -107,10 +107,16 @@ function renderPending() {
 
 function renderSheets() {
   // The poll fires every two seconds and this rebuilds innerHTML, which
-  // destroys whatever the user is typing in and takes focus with it. If the
-  // cursor is inside this block, leave it alone — the next refresh after they
-  // click away will catch up.
-  if ($('sheets').contains(document.activeElement)) return;
+  // destroys whatever the user is typing in and takes focus with it. So bail
+  // while a text field in here has focus; the next refresh catches up.
+  //
+  // Narrow to text fields deliberately. Guarding on ANY focus also blocked the
+  // re-render triggered by clicking a row — the click focuses the row itself,
+  // which is inside this block, so opening a drawer set the state and then
+  // refused to draw it.
+  const focused = document.activeElement;
+  if (focused && $('sheets').contains(focused) &&
+      (focused.tagName === 'TEXTAREA' || focused.tagName === 'INPUT')) return;
 
   const list = state.paired || [];
   $('sheetCount').textContent = list.length + ' paired';

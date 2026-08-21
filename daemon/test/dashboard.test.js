@@ -172,8 +172,12 @@ test('a live re-render never runs under the cursor', () => {
   // The poll rebuilds innerHTML every two seconds. Any block holding an input
   // must bail while it has focus, or it eats what the user is typing — which
   // it did, in the per-sheet instructions box.
-  assert.ok(/if \(\$\('sheets'\)\.contains\(document\.activeElement\)\) return;/.test(CLIENT),
-    'renderSheets must not rebuild while focus is inside it');
+  assert.ok(/\$\('sheets'\)\.contains\(focused\)/.test(CLIENT),
+    'renderSheets must not rebuild while a field inside it has focus');
+  // ...but only for text fields. Guarding on any focus blocked the re-render
+  // that clicking a row triggers, so drawers stopped opening entirely.
+  assert.ok(/focused\.tagName === 'TEXTAREA' \|\| focused\.tagName === 'INPUT'/.test(CLIENT),
+    'the guard must be about typing, not about focus');
   assert.ok(/document\.activeElement !== \$\('globalIns'\)/.test(CLIENT),
     'the global instructions box needs the same guard');
 });
