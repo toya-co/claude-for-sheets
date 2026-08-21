@@ -168,6 +168,27 @@ test('the page renders without a token and without state', () => {
   assert.ok(empty.includes('<section class="page on" id="dashboard"'));
 });
 
+test('a live re-render never runs under the cursor', () => {
+  // The poll rebuilds innerHTML every two seconds. Any block holding an input
+  // must bail while it has focus, or it eats what the user is typing — which
+  // it did, in the per-sheet instructions box.
+  assert.ok(/if \(\$\('sheets'\)\.contains\(document\.activeElement\)\) return;/.test(CLIENT),
+    'renderSheets must not rebuild while focus is inside it');
+  assert.ok(/document\.activeElement !== \$\('globalIns'\)/.test(CLIENT),
+    'the global instructions box needs the same guard');
+});
+
+test('a whole spreadsheet row opens its drawer, by mouse and by keyboard', () => {
+  assert.ok(/data-card="/.test(CLIENT), 'the header row carries the target');
+  assert.ok(/role="button" tabindex="0"/.test(CLIENT), 'and is reachable without a mouse');
+  assert.ok(/closest\('\[data-card\]'\)/.test(CLIENT), 'clicks are routed from the row');
+  assert.ok(/aria-expanded/.test(CLIENT), 'its state is announced');
+  // Clicks inside the drawer must not collapse it out from under its own
+  // controls, so button handling has to run before row handling.
+  assert.ok(CLIENT.indexOf("closest('button')") < CLIENT.indexOf("closest('[data-card]')"),
+    'buttons are handled before the row');
+});
+
 test('polling backs off when the tab is hidden', () => {
   assert.ok(/document\.hidden \? 10000 : 2000/.test(CLIENT),
     'a hidden tab should not poll at the same rate');

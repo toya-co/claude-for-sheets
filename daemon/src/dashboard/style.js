@@ -99,6 +99,11 @@ a{color:var(--live)}
 .card.pend{border-color:var(--warn);background:var(--warn-bg)}
 .card.fail{border-color:var(--bad)}
 .card .t{font-weight:600}
+.card .head{cursor:pointer;border-radius:4px;margin:-4px;padding:4px}
+.card .head:hover{background:var(--surface-2)}
+.card .head:focus-visible{outline:2px solid var(--live);outline-offset:-1px}
+.card.open{border-color:var(--fg-faint)}
+.chev{color:var(--fg-faint);font-size:11px;flex:none;width:10px}
 .card .m{margin-top:3px}
 .row{display:flex;align-items:center;gap:13px}
 .row .grow{flex:1;min-width:0}

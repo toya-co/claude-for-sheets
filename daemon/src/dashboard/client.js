@@ -106,6 +106,12 @@ function renderPending() {
 }
 
 function renderSheets() {
+  // The poll fires every two seconds and this rebuilds innerHTML, which
+  // destroys whatever the user is typing in and takes focus with it. If the
+  // cursor is inside this block, leave it alone — the next refresh after they
+  // click away will catch up.
+  if ($('sheets').contains(document.activeElement)) return;
+
   const list = state.paired || [];
   $('sheetCount').textContent = list.length + ' paired';
   if (!list.length) {
@@ -119,10 +125,12 @@ function renderSheets() {
       (p.sessionId ? ' \\u00b7 conversation active' : ' \\u00b7 no conversation yet') +
       (r.turns ? ' \\u00b7 ' + r.turns + ' turn' + (r.turns === 1 ? '' : 's') +
                  ' \\u00b7 ' + money(r.cost) : '');
-    let html = '<div class="card"><div class="row">' +
+    let html = '<div class="card' + (open ? ' open' : '') + '">' +
+      '<div class="row head" data-card="' + esc(p.spreadsheetId) + '" ' +
+        'role="button" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '">' +
+      '<span class="chev">' + (open ? '▾' : '▸') + '</span>' +
       '<span class="grow"><span class="t">' + esc(p.name) + '</span>' +
       '<span class="m">' + meta + '</span></span>' +
-      '<button data-open="' + esc(p.spreadsheetId) + '">' + (open ? 'Close' : 'Open') + '</button>' +
       '</div>';
     if (open) {
       html += '<div class="drawer">' +
@@ -262,17 +270,24 @@ async function refresh() {
 
 // One delegated listener rather than inline handlers, so re-rendering the list
 // never leaves a dead onclick behind.
+function toggleCard(id) {
+  openSheet = openSheet === id ? null : id;
+  renderSheets();
+}
+
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('button');
-  if (!b) return;
+  if (!b) {
+    // Anywhere on the header row opens or closes it. Clicks inside the open
+    // drawer are for its own controls and must not collapse it underfoot.
+    const head = e.target.closest('[data-card]');
+    if (head) toggleCard(head.dataset.card);
+    return;
+  }
 
   if (b.dataset.pair !== undefined) {
     await post('/pair', { spreadsheetId: b.dataset.pair, allow: !!b.dataset.allow });
     return refresh();
-  }
-  if (b.dataset.open !== undefined) {
-    openSheet = openSheet === b.dataset.open ? null : b.dataset.open;
-    return renderSheets();
   }
   if (b.dataset.saveins !== undefined) {
     await post('/instructions', { scope: 'sheet', spreadsheetId: b.dataset.saveins,
@@ -315,6 +330,11 @@ document.addEventListener('click', async (e) => {
     navigator.clipboard.writeText(text).then(() => flash('copiedDiag'));
     return;
   }
+});
+
+document.addEventListener('keydown', (e) => {
+  const head = e.target.closest && e.target.closest('[data-card]');
+  if (head && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleCard(head.dataset.card); }
 });
 
 $('model').addEventListener('change', () => saveSettings({ model: $('model').value }, 'savedModel'));
