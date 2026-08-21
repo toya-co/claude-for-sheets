@@ -8,7 +8,7 @@
  * happens here, out-of-band, in a UI the web cannot drive.
  */
 
-function page() {
+function page(dashToken) {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -49,6 +49,19 @@ function page() {
   <div id="activity"><div class="empty">No turns yet.</div></div>
 
 <script>
+// Proof this page came from the daemon. A cross-origin page cannot read
+// GET / (no CORS headers there), so it cannot learn this — and every
+// state-changing route below refuses without it.
+const DASH_TOKEN = ${JSON.stringify(dashToken)};
+
+function post(path, body) {
+  return fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Dashboard-Token': DASH_TOKEN },
+    body: JSON.stringify(body),
+  });
+}
+
 const esc = (s) => String(s == null ? '' : s)
   .replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
@@ -96,18 +109,12 @@ async function refresh() {
 }
 
 async function decide(id, allow) {
-  await fetch('/pair', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ spreadsheetId: id, allow })
-  });
+  await post('/pair', { spreadsheetId: id, allow });
   refresh();
 }
 
 async function unpair(id) {
-  await fetch('/unpair', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ spreadsheetId: id })
-  });
+  await post('/unpair', { spreadsheetId: id });
   refresh();
 }
 

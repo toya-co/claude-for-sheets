@@ -36,6 +36,32 @@ const VERSION = require('../package.json').version;
 const pending = new Map();
 
 /**
+ * Proof that a request came from the dashboard this process served.
+ *
+ * CORS is `*` here and cannot be otherwise (§Pairing), so without this ANY web
+ * page could POST to the routes below — approving its own pairing, enabling
+ * web access, or relaxing the confirmation gate. Those are exactly the
+ * decisions that are supposed to be made out-of-band by a human.
+ *
+ * The token is minted per process and embedded in the dashboard HTML. A
+ * cross-origin page cannot read `GET /` — that route sends no CORS headers, so
+ * the browser withholds the response body — and therefore cannot learn it.
+ * Fire-and-forget POSTs still reach us, which is the point: they arrive
+ * without the token and are refused.
+ *
+ * This protects only the dashboard's own routes. The sidebar's routes are
+ * authenticated by things it alone holds: pairing for `/turn`, and the
+ * unguessable per-call ids for `/op-result` and `/gate-result`.
+ */
+const DASH_TOKEN = randomBytes(24).toString('hex');
+
+function fromDashboard(req, body) {
+  const header = req.headers['x-dashboard-token'];
+  const supplied = header || (body && body.dashboardToken);
+  return typeof supplied === 'string' && supplied === DASH_TOKEN;
+}
+
+/**
  * The tool loop's relay state.
  *
  * `turns` maps a per-turn token (known only to this process and the MCP bridge
@@ -256,6 +282,14 @@ async function handleTurn(req, res) {
   const started = Date.now();
   fs.mkdirSync(WORKSPACE, { recursive: true });
 
+  const settings = store.getSettings();
+
+  // How much to ask about, sent at turn start so the sidebar carries it on
+  // every write this turn. It comes from here rather than from anything the
+  // model said: the value is the user's own choice, made in the dashboard,
+  // and Claude has no way to influence it.
+  send({ type: 'settings', askBefore: settings.askBefore });
+
   // The tool loop: this turn's CLI process gets an MCP server (mcp-bridge.js)
   // whose every call lands back here, tagged with a token only that bridge
   // holds, and is relayed to this SSE stream for the sidebar to execute.
@@ -277,13 +311,13 @@ async function handleTurn(req, res) {
   const priorSession = store.getSessionId(spreadsheetId);
   const result = await claude.runTurn(buildPrompt(body), send, {
     cwd: WORKSPACE,
-    model: store.getSettings().model,
+    model: settings.model,
     sessionId: priorSession,
     resume: Boolean(priorSession),
     mcpConfig,
     // Web tools behind the sidebar gate (M5.5). The hook reads the turn token
     // from the CLI's environment and calls /gate with it.
-    webAccess: store.getSettings().webAccess !== false,
+    webAccess: settings.webAccess !== false,
     env: { SHEETS_TURN_TOKEN: turnToken, SHEETS_DAEMON_PORT: String(PORT) },
   });
   turns.delete(turnToken);
@@ -321,9 +355,11 @@ const server = https.createServer(loadCerts(), async (req, res) => {
 
   try {
     switch (`${req.method} ${url.pathname}`) {
+      // No CORS headers here, deliberately: a cross-origin page must not be
+      // able to read this response, because it carries the dashboard token.
       case 'GET /':
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        return res.end(dashboard.page());
+        return res.end(dashboard.page(DASH_TOKEN));
 
       case 'GET /ping': {
         const cli = await claude.checkCli();
@@ -340,18 +376,32 @@ const server = https.createServer(loadCerts(), async (req, res) => {
             ({ spreadsheetId, spreadsheetName, requestedAt })),
           paired: store.listPaired(),
           activity: store.listActivity(20),
+          // Without this the dashboard cannot render a control's own state,
+          // and the sidebar cannot learn how much to ask about.
+          settings: store.getSettings(),
         });
       }
 
       case 'POST /pair': {
-        const { spreadsheetId, allow } = await readBody(req);
-        return json(res, 200, { settled: settlePairing(spreadsheetId, Boolean(allow)) });
+        const body = await readBody(req);
+        if (!fromDashboard(req, body)) return json(res, 403, { error: 'not the dashboard' });
+        return json(res, 200,
+          { settled: settlePairing(body.spreadsheetId, Boolean(body.allow)) });
+      }
+
+      case 'POST /settings': {
+        const body = await readBody(req);
+        if (!fromDashboard(req, body)) return json(res, 403, { error: 'not the dashboard' });
+        // Answer with what is now true rather than what was asked for — the
+        // store clamps an unrecognized askBefore back to the strictest value.
+        return json(res, 200, { ok: true, settings: store.setSettings(body) });
       }
 
       case 'POST /instructions': {
-        const { scope, spreadsheetId, text } = await readBody(req);
-        if (scope === 'global') store.setGlobalInstructions(text);
-        else store.setSheetInstructions(spreadsheetId, text);
+        const body = await readBody(req);
+        if (!fromDashboard(req, body)) return json(res, 403, { error: 'not the dashboard' });
+        if (body.scope === 'global') store.setGlobalInstructions(body.text);
+        else store.setSheetInstructions(body.spreadsheetId, body.text);
         return json(res, 200, { ok: true });
       }
 
@@ -387,15 +437,28 @@ const server = https.createServer(loadCerts(), async (req, res) => {
       }
 
       case 'POST /reset': {
-        const { spreadsheetId } = await readBody(req);
-        store.clearSessionId(spreadsheetId);
+        const body = await readBody(req);
+        if (!fromDashboard(req, body)) return json(res, 403, { error: 'not the dashboard' });
+        store.clearSessionId(body.spreadsheetId);
         return json(res, 200, { ok: true });
       }
 
       case 'POST /unpair': {
-        const { spreadsheetId } = await readBody(req);
-        store.unpair(spreadsheetId);
+        const body = await readBody(req);
+        if (!fromDashboard(req, body)) return json(res, 403, { error: 'not the dashboard' });
+        store.unpair(body.spreadsheetId);
         return json(res, 200, { ok: true });
+      }
+
+      // Stopping must be as easy as starting: a background process holding the
+      // path to the user's Claude credential should never be something they
+      // cannot turn off without a terminal.
+      case 'POST /quit': {
+        const body = await readBody(req);
+        if (!fromDashboard(req, body)) return json(res, 403, { error: 'not the dashboard' });
+        json(res, 200, { ok: true });
+        console.log('quit requested from the dashboard');
+        return setTimeout(() => process.exit(0), 150);   // let the response flush
       }
 
       case 'POST /turn':

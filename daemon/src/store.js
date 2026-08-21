@@ -33,8 +33,28 @@ const DEFAULTS = {
     // Defaults on because the gate is always in front of it; false removes the
     // web tools from the CLI invocation entirely.
     webAccess: true,
+    /**
+     * How much the confirmation gate asks about.
+     *
+     *   'destructive'   — anything that overwrites or deletes (the default)
+     *   'unrecoverable' — only what undo cannot take back
+     *
+     * The split is undo, not difficulty. Every gated sheet edit is restorable
+     * from the in-file history, so for those the prompt is a courtesy and
+     * relaxing it is honest. Deleting a tab, and any edit too large to
+     * snapshot, are different in kind and keep asking either way — as does
+     * every web request, which this setting does not touch at all, because
+     * data that has already left cannot be restored.
+     */
+    askBefore: 'destructive',
+    // Start the app at login. Owned here so the dashboard can show its real
+    // state; the OS-level registration is applied by the daemon (M10.6).
+    autostart: false,
   },
 };
+
+/** The only values `askBefore` may take. Anything else falls back to strictest. */
+const ASK_LEVELS = ['destructive', 'unrecoverable'];
 
 /**
  * Read-through, deliberately uncached.
@@ -156,6 +176,38 @@ function getSettings() {
   return load().settings;
 }
 
+/**
+ * Write settings from the dashboard, one key at a time and validated here.
+ *
+ * Validation is deliberately at the store rather than the route: `askBefore`
+ * decides how much the confirmation gate asks about, so an unrecognized value
+ * must fall back to the STRICTEST setting rather than being stored verbatim
+ * and later compared loosely. A typo should never quietly widen what applies
+ * without asking.
+ *
+ * Returns the full settings object as saved, so the caller can answer with
+ * exactly what is now true rather than what it hoped to write.
+ */
+function setSettings(patch) {
+  return update((s) => {
+    const p = patch || {};
+    if (typeof p.model === 'string' && p.model.trim()) {
+      s.settings.model = p.model.trim();
+    }
+    if (p.webAccess !== undefined) {
+      s.settings.webAccess = Boolean(p.webAccess);
+    }
+    if (p.askBefore !== undefined) {
+      s.settings.askBefore =
+        ASK_LEVELS.indexOf(p.askBefore) === -1 ? 'destructive' : p.askBefore;
+    }
+    if (p.autostart !== undefined) {
+      s.settings.autostart = Boolean(p.autostart);
+    }
+    return s.settings;
+  });
+}
+
 function setGlobalInstructions(text) {
   update((s) => { s.settings.globalInstructions = String(text || ''); });
 }
@@ -169,9 +221,10 @@ function setSheetInstructions(spreadsheetId, text) {
 }
 
 module.exports = {
-  DIR, FILE,
+  DIR, FILE, ASK_LEVELS,
   isPaired, pair, unpair, listPaired,
   recordActivity, listActivity,
-  getInstructions, setGlobalInstructions, setSheetInstructions, getSettings,
+  getInstructions, setGlobalInstructions, setSheetInstructions,
+  getSettings, setSettings,
   getSessionId, setSessionId, clearSessionId,
 };

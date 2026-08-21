@@ -121,6 +121,12 @@
       // show while it runs. Structural tools address rows/columns/tabs rather
       // than an a1 range, hence builders instead of a fixed field mapping.
       const span = (a) => a.count > 1 ? a.index + '-' + (a.index + a.count - 1) : a.index;
+      // How much the confirmation gate asks about, sent by the daemon at the
+      // start of every turn. It is the user's own setting, made in the
+      // dashboard — never anything the model said — and Apps Script re-checks
+      // it at apply time regardless of what is passed here.
+      let askBefore = 'destructive';
+
       // What Claude last read, and when — the basis of every write's guard.
       //
       // Apps Script re-hashes this region inside the same execution as the
@@ -394,7 +400,8 @@
             node.textContent = 'Apps Script error: ' + err.message;
             postOpResult(callId, { error: String(err.message || err) });
           })
-          .applyOps({ ops: [op], confirmed: confirmed, guard: guardState });
+          .applyOps({ ops: [op], confirmed: confirmed, guard: guardState,
+                      askBefore: askBefore });
       }
 
       function verb(type) {
@@ -518,6 +525,8 @@
                 bubble.innerHTML = '';
               } else if (ev.type === 'tool_call') {
                 handleToolCall(ev, node);
+              } else if (ev.type === 'settings') {
+                askBefore = ev.askBefore || 'destructive';
               } else if (ev.type === 'gate') {
                 handleGate(ev, node);
               } else if (ev.type === 'text') {

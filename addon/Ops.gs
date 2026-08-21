@@ -17,6 +17,50 @@
 /** Above this many existing non-empty cells overwritten, ask first. */
 const DESTRUCTIVE_CELL_THRESHOLD = 10;
 
+/**
+ * How much the gate asks about. The user's choice, set in the dashboard and
+ * carried on the request; see `askLevel_`.
+ *
+ *   'destructive'   — anything that overwrites or deletes (the default)
+ *   'unrecoverable' — only what undo cannot take back
+ *
+ * The split is undo, not difficulty. Every gated edit below is restorable from
+ * the in-file history, so for those the prompt is a courtesy and relaxing it is
+ * honest. Two things are different in kind and keep asking either way:
+ * deleting a sheet, and any edit whose snapshot would exceed MAX_ENTRY_BYTES —
+ * that entry is recorded non-restorable, so there would be nothing to go back
+ * to. Web requests are gated in the daemon and untouched by this.
+ */
+const ASK_DESTRUCTIVE = 'destructive';
+const ASK_UNRECOVERABLE = 'unrecoverable';
+
+/**
+ * Read the level off a request, defaulting to the STRICT end.
+ *
+ * Anything unrecognized — absent, misspelled, or a value from a newer daemon
+ * this add-on does not know — must mean "ask about everything". A gate that
+ * fails open on an unfamiliar string is the exact shape of bug that shipped
+ * twice already in this project, so the comparison is an allowlist of one.
+ */
+function askLevel_(request) {
+  return (request && request.askBefore) === ASK_UNRECOVERABLE
+    ? ASK_UNRECOVERABLE
+    : ASK_DESTRUCTIVE;
+}
+
+/**
+ * Would this op's snapshot fit under the ceiling — i.e. will undo actually be
+ * able to put it back? Used only to decide whether the relaxed level may skip
+ * the prompt; the real restorable flag is recorded at apply time.
+ */
+function wouldRestore_(grid) {
+  try {
+    return JSON.stringify(grid).length <= MAX_ENTRY_BYTES;
+  } catch (e) {
+    return false;   // unmeasurable means treat as unrecoverable, so it asks
+  }
+}
+
 /** Where onEdit (Code.gs) leaves its "a person typed" marker. */
 const EDIT_MARK_KEY = 'claude.humanEdit';
 
@@ -228,8 +272,22 @@ function countNonEmpty_(grid) {
  * `clear` is always gated when it would remove anything at all: unlike a write,
  * it leaves nothing behind to notice.
  */
-function inspectOp_(ss, op) {
+function inspectOp_(ss, op, level) {
   const base = { opId: op.opId || null, type: op.type, ok: true };
+  const checked = inspectOpRaw_(ss, op, base);
+
+  // ONE relaxation point, deliberately. Each inspector decides only what an op
+  // destroys and whether it could be put back; the decision about how much to
+  // ask is made here, once, so no op type can quietly acquire its own policy.
+  if (level === ASK_UNRECOVERABLE && checked.ok && checked.destructive &&
+      !checked.alwaysAsk && checked.recoverable) {
+    checked.destructive = false;
+    checked.relaxed = true;
+  }
+  return checked;
+}
+
+function inspectOpRaw_(ss, op, base) {
 
   // The history sheet holds the undo payloads. An op that touches it — from a
   // confused model or a hostile cell — would let an edit destroy its own undo.
@@ -287,6 +345,7 @@ function inspectOp_(ss, op) {
   base.formulas = formulaCount;
   base.destructive = destructive;
   base.reason = reason;
+  base.recoverable = wouldRestore_(existing);
   return base;
 }
 
@@ -367,8 +426,10 @@ function inspectStructural_(ss, op, base) {
     const block = rows
       ? sheet.getRange(op.index, 1, count, width)
       : sheet.getRange(1, op.index, width, count);
-    const occupied = countNonEmpty_(sanitizeGrid_(block.getValues()));
+    const blockVals = sanitizeGrid_(block.getValues());
+    const occupied = countNonEmpty_(blockVals);
     const formulas = countNonEmpty_(block.getFormulas());
+    base.recoverable = wouldRestore_(blockVals);
     base.occupied = occupied;
     base.formulas = formulas;
     base.destructive = occupied + formulas > 0;
@@ -390,6 +451,8 @@ function inspectStructural_(ss, op, base) {
   const occupied = countNonEmpty_(grid);
   const tooBig = JSON.stringify(grid).length > MAX_ENTRY_BYTES;
   base.occupied = occupied;
+  base.recoverable = !tooBig;
+  base.alwaysAsk = true;     // never relaxed, whatever the level
   base.destructive = true;   // always — a sheet is a big thing to lose
   base.reason = "deletes the sheet '" + sheet.getName() + "' (" + occupied +
     ' cell' + (occupied === 1 ? '' : 's') + ' of content)' +
@@ -452,7 +515,9 @@ function inspectRangeOp_(ss, op, base) {
       return { ok: false, type: op.type,
         error: { code: 'BAD_PAYLOAD', message: "mergeType must be 'all', 'across', or 'vertical'." } };
     }
-    const doomed = mergeDoomed_(sanitizeGrid_(range.getValues()), range.getFormulas(), mergeType);
+    const vals = sanitizeGrid_(range.getValues());
+    base.recoverable = wouldRestore_(vals);
+    const doomed = mergeDoomed_(vals, range.getFormulas(), mergeType);
     if (doomed > 0) {
       base.destructive = true;
       base.reason = 'merges away ' + doomed + ' cell' + (doomed === 1 ? '' : 's') +
@@ -532,6 +597,7 @@ function inspectRangeOp_(ss, op, base) {
     }
   }
   const formulas = countNonEmpty_(range.getFormulas());
+  base.recoverable = wouldRestore_(sanitizeGrid_(range.getValues()));
   if (formulas > 0) {
     base.destructive = true;
     base.reason = 'sorts a range holding ' + formulas + ' formula' + (formulas === 1 ? '' : 's') +
@@ -660,10 +726,11 @@ function inspectLayout_(ss, op, base) {
  * Dry run. Returns one inspection per op, in order, touching nothing.
  * The sidebar uses this to decide what to ask about before anything happens.
  */
-function inspectOps(ops) {
+function inspectOps(ops, askBefore) {
   if (!Array.isArray(ops)) return [];
   const ss = writeSpreadsheet_();
-  return ops.map(function (op) { return inspectOp_(ss, op); });
+  const level = askLevel_({ askBefore: askBefore });
+  return ops.map(function (op) { return inspectOp_(ss, op, level); });
 }
 
 /**
@@ -1096,6 +1163,7 @@ function applyOps(request) {
 
   const turnId = 'turn_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
   const confirmed = request.confirmed || [];
+  const level = askLevel_(request);
   const results = [];
 
   for (let i = 0; i < ops.length; i++) {
@@ -1105,7 +1173,7 @@ function applyOps(request) {
     // Re-inspect at apply time. The sidebar's inspection is a UI convenience;
     // this is the check that actually governs, and it runs against the sheet as
     // it is now — including whatever the previous op in this turn just changed.
-    const check = inspectOp_(ss, op);
+    const check = inspectOp_(ss, op, level);
     if (!check.ok) {
       results.push({ ok: false, opId: op.opId, type: op.type, error: check.error });
       break;
