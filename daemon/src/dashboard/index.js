@@ -179,8 +179,8 @@ function page(dashToken) {
 
   <div class="card"><div class="row">
     <span class="grow"><span class="t">Start at login</span>
-    <span class="m">Registers a per-user scheduled task &middot; no tray icon, no
-    background installer</span></span>
+    <span class="m">Puts a small file in your Startup folder &middot; no admin, no
+    installer, nothing in the registry</span></span>
     ${seg('auto', [['1', 'On', 'autoOn'], ['0', 'Off', 'autoOff']])}
   </div>
   <div class="drawer"><p class="m" id="autoNote" style="margin:0"></p></div>

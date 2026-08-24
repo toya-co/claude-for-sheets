@@ -220,8 +220,9 @@ function renderSettings() {
     auto.supported === false ? esc(auto.reason || 'Not available on this platform.')
     : auto.stale ? 'A startup file exists but launches a different copy of the app. ' +
         'Turn it on again to repoint it.'
-    : auto.registered ? 'A startup file is in place. The app opens minimized at ' +
-        'login — closing that window stops it. Deleting the file turns this off too.'
+    : auto.registered ? 'On. <code>' + esc(auto.path || '') + '</code> runs at login ' +
+        'and opens the app minimized — closing that window stops the app, and ' +
+        'deleting the file turns this off.'
     : 'Off — after a restart you will need to start the app yourself.';
 }
 
