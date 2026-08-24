@@ -103,27 +103,29 @@ test('every argument is its own argv element, never a command line', { skip: !on
     'nothing that would mean something to a shell');
 });
 
-test('it tries the windowless task first, then falls back', { skip: !onWindows }, async () => {
-  // /NP registers without a stored password, which runs with a
-  // non-interactive token and therefore shows no console window. Not every
-  // machine allows it, so a refusal falls back to the plain interactive task
-  // -- which works everywhere and does show a window. The caller is told
-  // which one it got.
-  let first = true;
-  const exec = fakeExec(() => {
-    if (first) { first = false; return { ok: false, err: 'ERROR: cannot use /NP' }; }
-    return { ok: true };
-  });
-  const res = await autostart.register(exec);
-  assert.strictEqual(res.ok, true);
-  assert.strictEqual(res.windowless, false, 'and it says the window will appear');
-  assert.ok(exec.calls[0].args.includes('/NP'), 'windowless was attempted first');
-  assert.ok(!exec.calls[1].args.includes('/NP'), 'the fallback drops it');
+test('it never passes /NP, which can prompt for a password', { skip: !onWindows }, async () => {
+  // /NP looked like the windowless route, but its own help says it must be
+  // combined with /RU -- and with /RU schtasks can prompt on stdin. A prompt
+  // with nobody to answer it hangs the daemon, which is far worse than a
+  // visible console window.
+  const exec = fakeExec({ ok: true });
+  await autostart.register(exec);
+  assert.strictEqual(exec.calls.length, 1, 'one attempt, no fallback dance');
+  assert.ok(!exec.calls[0].args.includes('/NP'), '/NP must not be used');
+  assert.ok(!exec.calls[0].args.includes('/RP'), 'and no password is ever passed');
 });
 
-test('a windowless registration reports itself as such', { skip: !onWindows }, async () => {
+test('registration cannot hang on a prompt', () => {
+  const src = require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'src', 'autostart.js'), 'utf8');
+  assert.match(src, /timeout: \d+/, 'every call has a deadline');
+  assert.match(src, /stdio: \['ignore'/, 'stdin is closed, so a prompt gets EOF');
+});
+
+test('an interactive task admits it shows a window', { skip: !onWindows }, async () => {
   const res = await autostart.register(fakeExec({ ok: true }));
-  assert.strictEqual(res.windowless, true);
+  assert.strictEqual(res.windowless, false,
+    'the page must not claim hidden when the task is interactive');
 });
 
 test('a refused registration is reported, not swallowed', { skip: !onWindows }, async () => {
@@ -131,8 +133,10 @@ test('a refused registration is reported, not swallowed', { skip: !onWindows }, 
   const exec = fakeExec({ ok: false, code: 1, out: '', err: 'ERROR: Access is denied.' });
   const res = await autostart.register(exec);
   assert.strictEqual(res.ok, false);
-  assert.match(res.error, /Access is denied/,
-    'the real reason must survive to the dashboard');
+  // Bare "Access is denied." sends nobody anywhere useful, so it is explained.
+  assert.match(res.error, /access denied/i, 'the refusal survives');
+  assert.match(res.error, /npm start/,
+    'and the user is told what to do instead');
 });
 
 // ------------------------------------------------------------- unregistering

@@ -64,10 +64,32 @@ function why() {
     : 'Start at login needs the packaged build for this platform. Until then, run npm start.';
 }
 
+/**
+ * Turn schtasks' terse refusals into something a person can act on.
+ * "ERROR: Access is denied." on its own sends nobody anywhere useful.
+ */
+function explain(raw) {
+  if (/access is denied/i.test(raw)) {
+    return 'Windows refused to create the task (access denied). This usually means ' +
+           'the app is running under a restricted shell, or your organization blocks ' +
+           'scheduled tasks by policy. Try starting the app from a normal terminal, ' +
+           'or leave this off and run npm start after a restart.';
+  }
+  if (/cannot find|does not exist/i.test(raw)) {
+    return 'Windows could not find the Task Scheduler service. Leave this off and ' +
+           'run npm start after a restart.';
+  }
+  return raw;
+}
+
 /** Promise-wrapped execFile. Never a shell — see the note above. */
 function run(exe, args) {
   return new Promise((resolve) => {
-    execFile(exe, args, { windowsHide: true }, (err, stdout, stderr) => {
+    // stdin is closed and a hard timeout applies: schtasks can prompt (for a
+    // password, for a confirmation), and a prompt with nobody to answer it
+    // would hang the daemon rather than fail.
+    execFile(exe, args, { windowsHide: true, timeout: 15000,
+                          stdio: ['ignore', 'pipe', 'pipe'] }, (err, stdout, stderr) => {
       resolve({
         ok: !err,
         code: err ? (err.code === undefined ? 1 : err.code) : 0,
@@ -119,24 +141,23 @@ async function register(exec) {
   // for a stale one. /RL LIMITED keeps it at the user's own rights: this
   // process needs no elevation and asking for it would misstate its scope.
   //
-  // /NP registers without storing a password, which runs the task with a
-  // non-interactive token — and therefore with no console window at all. It
-  // is tried first because it is the only windowless option that does not
-  // involve a script shim; if Windows refuses it, we fall back to the plain
-  // interactive task, which works everywhere and shows a console window.
-  const base = ['/Create', '/TN', TASK_NAME, '/SC', 'ONLOGON',
-                '/TR', taskCommand(), '/RL', 'LIMITED', '/F'];
-
-  let res = await exec('schtasks', base.concat(['/NP']));
-  let windowless = true;
+  // No /NP. It looked like the way to get a windowless task — it registers
+  // without a stored password, so the task runs non-interactively — but its
+  // own help says it "must be combined with either /RU or /XML", and with
+  // /RU schtasks can PROMPT for a password on stdin. A prompt would hang this
+  // process forever, which is a far worse failure than a visible console
+  // window. The windowless route, if it is ever wanted, is an XML task with
+  // <LogonType>S4U</LogonType>, which never prompts.
+  const res = await exec('schtasks', [
+    '/Create', '/TN', TASK_NAME, '/SC', 'ONLOGON',
+    '/TR', taskCommand(), '/RL', 'LIMITED', '/F',
+  ]);
   if (!res.ok) {
-    res = await exec('schtasks', base);
-    windowless = false;
+    return { ok: false, error: explain((res.err || res.out || 'schtasks failed').trim()) };
   }
-  if (!res.ok) {
-    return { ok: false, error: (res.err || res.out || 'schtasks failed').trim() };
-  }
-  return { ok: true, windowless: windowless };
+  // An interactive logon task shows a console window when it fires. Say so
+  // rather than let the page claim otherwise.
+  return { ok: true, windowless: false };
 }
 
 async function unregister(exec) {
