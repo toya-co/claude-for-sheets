@@ -220,6 +220,28 @@ const howDocs = () => `
 `;
 
 const setupDocs = () => `
+  <h2>Installing the app itself</h2>
+  <p>You are reading this from a running copy, so this section is for the next
+  machine, a colleague, or an update &mdash; not for right now.</p>
+
+  <h3>What it needs first</h3>
+  <p><strong>Node 18 or newer</strong>, and <strong>Claude Code signed in</strong>.
+  Neither is bundled. Run <code>claude</code> once in a terminal and sign in; the
+  credential stays in Claude Code and this app never sees it.</p>
+
+  <h3>Then</h3>
+  <p><code>git clone</code> the repository, and from the <code>daemon</code> folder:</p>
+  <p><code>npm run certs</code> &mdash; once, to make the local certificate<br>
+  <code>npm start</code> &mdash; every time, or let Start at login do it</p>
+  <p>There are no dependencies to install. Open
+  <code>https://localhost:8443/</code> and accept the certificate warning once
+  per browser &mdash; it is a self-signed certificate for your own machine, and
+  your browser has no way to know that.</p>
+
+  <h3>Updating</h3>
+  <p><code>git pull</code>, then stop and start the app. If Start at login is on
+  and you moved the folder, turn it off and on again to repoint it.</p>
+
   <h2>Adding a spreadsheet you already have</h2>
   <p>The add-on is a container-bound script: it lives inside one spreadsheet rather
   than in your account. A new sheet made from the template needs nothing. An existing
