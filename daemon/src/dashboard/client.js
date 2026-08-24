@@ -193,7 +193,7 @@ function renderActivity() {
     '<span class="sep">\\u00b7</span><span class="m">' +
       (rows.length ? Math.round(resumed / rows.length * 100) : 0) + '% resumed</span>';
 
-  $('activity').innerHTML = rows.length
+  $('actList').innerHTML = rows.length
     ? rows.map(turnLine).join('')
     : '<div class="empty">No turns yet.</div>';
 }

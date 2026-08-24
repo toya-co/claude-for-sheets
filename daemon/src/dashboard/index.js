@@ -99,7 +99,7 @@ function page(dashToken) {
   <h1>Activity</h1>
   <p class="lede">Every turn this app has served, newest first, across all spreadsheets.</p>
   <div class="statusbar" id="actSummary"></div>
-  <div id="activity"></div>
+  <div id="actList"></div>
   <div class="note">
     <strong>The number worth watching is &ldquo;resumed&rdquo;.</strong> A resumed turn
     reads its conversation from cache instead of rebuilding it, which is several times

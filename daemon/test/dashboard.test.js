@@ -205,6 +205,56 @@ test('a whole spreadsheet row opens its drawer, by mouse and by keyboard', () =>
     'buttons are handled before the row');
 });
 
+test('no id appears twice in the markup', () => {
+  // getElementById returns the FIRST match, so a duplicate id silently hands
+  // back the wrong element. This happened: a section and the list inside it
+  // both had id="activity", so writing the turn list wiped the section --
+  // taking #actSummary with it, which then threw on the next poll. A render
+  // that destroys its own targets looks like a dead daemon.
+  const seen = Object.create(null);
+  let m;
+  const re = /id="([A-Za-z0-9_-]+)"/g;
+  while ((m = re.exec(MARKUP)) !== null) seen[m[1]] = (seen[m[1]] || 0) + 1;
+  const dupes = Object.keys(seen).filter((k) => seen[k] > 1).sort();
+  assert.deepStrictEqual(dupes, [], 'duplicate ids: ' + dupes.join(', '));
+});
+
+test('nothing writes into an element that contains another render target', () => {
+  // The general form of the duplicate-id bug: innerHTML on an ancestor
+  // destroys every id nested inside it, so the next poll finds them gone.
+  const targets = [];
+  let m;
+  const re = /\$\('([A-Za-z0-9_-]+)'\)\.innerHTML\s*=/g;
+  while ((m = re.exec(CLIENT)) !== null) targets.push(m[1]);
+
+  /** The markup an element owns, found by balancing its own tag. */
+  function extentOf(id) {
+    const at = MARKUP.indexOf('id="' + id + '"');
+    if (at === -1) return '';
+    const open = MARKUP.lastIndexOf('<', at);
+    const tag = /^<([a-z]+)/.exec(MARKUP.slice(open))[1];
+    // Lookahead rather than a  escape: inside this string literal the
+    // backslash form becomes a control character, not a word boundary.
+    const scan = new RegExp('<' + tag + '(?=[ >])|</' + tag + '>', 'g');
+    scan.lastIndex = open;
+    let depth = 0, hit;
+    while ((hit = scan.exec(MARKUP)) !== null) {
+      depth += hit[0][1] === '/' ? -1 : 1;
+      if (depth === 0) return MARKUP.slice(open, hit.index);
+    }
+    return MARKUP.slice(open);
+  }
+
+  for (const t of new Set(targets)) {
+    const inside = extentOf(t);
+    for (const other of new Set(targets)) {
+      if (other === t) continue;
+      assert.ok(!inside.includes('id="' + other + '"'),
+        'writing #' + t + ' would destroy #' + other + ' nested inside it');
+    }
+  }
+});
+
 test('a missing element names itself instead of failing anonymously', () => {
   // "Cannot set properties of null" names neither the element nor the caller.
   assert.ok(/throw new Error\('missing element #' \+ id\)/.test(CLIENT),
