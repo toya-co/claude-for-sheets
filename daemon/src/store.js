@@ -50,6 +50,9 @@ const DEFAULTS = {
     // Start the app at login. Owned here so the dashboard can show its real
     // state; the OS-level registration is applied by the daemon (M10.6).
     autostart: false,
+    // True when the logon task had to fall back to the interactive variant,
+    // which shows a console window. Display only.
+    autostartWindow: false,
   },
 };
 
@@ -203,6 +206,9 @@ function setSettings(patch) {
     }
     if (p.autostart !== undefined) {
       s.settings.autostart = Boolean(p.autostart);
+    }
+    if (p.autostartWindow !== undefined) {
+      s.settings.autostartWindow = Boolean(p.autostartWindow);
     }
     return s.settings;
   });

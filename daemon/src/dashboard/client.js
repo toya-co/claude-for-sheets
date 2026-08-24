@@ -220,7 +220,10 @@ function renderSettings() {
     auto.supported === false ? esc(auto.reason || 'Not available on this platform.')
     : auto.stale ? 'A task exists but points at a different copy of the app. ' +
         'Turn it on again to repoint it.'
-    : auto.registered ? 'Registered as a logon task, started hidden — no console window.'
+    : auto.registered ? 'Registered as a logon task.' +
+        (state.settings && state.settings.autostartWindow
+          ? ' A console window appears at login — closing it stops the app.'
+          : ' It starts with no console window.')
     : 'Off — after a restart you will need to start the app yourself.';
 }
 

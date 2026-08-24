@@ -29,8 +29,8 @@ function fakeExec(reply) {
 
 const XML_HERE = () => ({
   ok: true,
-  out: '<Task><Actions><Exec><Command>wscript.exe</Command>' +
-       '<Arguments>"' + autostart.LAUNCHER + '"</Arguments></Exec></Actions></Task>',
+  out: '<Task><Actions><Exec><Command>node.exe</Command>' +
+       '<Arguments>' + autostart.taskCommand() + '</Arguments></Exec></Actions></Task>',
   err: '',
 });
 const XML_ELSEWHERE = {
@@ -43,26 +43,34 @@ const NOT_FOUND = { ok: false, code: 1, out: '', err: 'ERROR: The system cannot 
 
 const onWindows = process.platform === 'win32';
 
-// ------------------------------------------------------------- the launcher
+// ----------------------------------------------------- no script shim, ever
 
-test('the launcher hides the window, or the feature is worse than nothing', () => {
-  // A logon task running node.exe directly pops a console window at every
-  // login. The VBS shim exists solely to prevent that; window style 0 is the
-  // whole point of it.
-  const vbs = autostart.launcherSource();
-  assert.match(vbs, /WScript\.Shell/);
-  assert.match(vbs, /,\s*0,\s*False/, 'window style 0 = hidden, and do not wait');
-  assert.ok(vbs.includes(process.execPath), 'it launches this exact node');
-  assert.ok(vbs.includes(autostart.ENTRY), 'and this exact entry point');
+test('the task runs node directly, with no script interpreter', () => {
+  // Measured, not assumed: launching node through a generated .vbs with a
+  // hidden window got the command line flagged by Windows Defender as
+  // Trojan:Win32/Commando.A!ml and blocked. "Scheduled task at logon runs a
+  // hidden script via wscript" is what a dropper looks like, and a setup step
+  // that raises a malware alert is worse than not having the feature.
+  const cmd = autostart.taskCommand();
+  assert.ok(cmd.includes(process.execPath), 'it launches this exact node');
+  assert.ok(cmd.includes(autostart.ENTRY), 'and this exact entry point');
+  for (const shim of ['wscript', 'cscript', '.vbs', 'powershell', 'mshta', 'rundll32']) {
+    assert.ok(!cmd.toLowerCase().includes(shim), 'no ' + shim + ' in the command');
+  }
 });
 
-test('paths in the launcher are quoted, since Program Files has a space', () => {
-  const vbs = autostart.launcherSource();
-  // Inside a VBScript string literal a quote is doubled. Unquoted, the space
-  // in "C:\Program Files\nodejs" would split the command.
-  assert.match(vbs, /""[A-Za-z]:\\[^"]*node\.exe""/, 'node path is quoted');
-  assert.ok(!/[^"]C:\\Program Files\\nodejs\\node\.exe/.test(vbs.replace(/""/g, '"')),
-    'no bare unquoted path survives');
+test('the source carries no script-shim machinery at all', () => {
+  const src = require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'src', 'autostart.js'), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '');   // comments explain it; code must not do it
+  assert.ok(!/\.vbs|WScript\.Shell|wscript/i.test(code),
+    'a shim must not creep back in — it is an antivirus detection, not a style choice');
+});
+
+test('both paths are quoted, since Program Files has a space', () => {
+  const cmd = autostart.taskCommand();
+  assert.match(cmd, /^"[^"]+node\.exe" "[^"]+index\.js"$/,
+    'unquoted, the space in the node path would split the command');
 });
 
 // --------------------------------------------------------------- registering
@@ -79,8 +87,8 @@ test('register creates a per-user logon task at the user\'s own rights', { skip:
   assert.strictEqual(args[args.indexOf('/RL') + 1], 'LIMITED',
     'no elevation — this process needs none, and asking would misstate its scope');
   assert.ok(args.includes('/F'), '/F replaces a stale task, which is how repointing works');
-  assert.match(args[args.indexOf('/TR') + 1], /^wscript\.exe "/,
-    'it runs through the hidden-window shim, not node directly');
+  assert.strictEqual(args[args.indexOf('/TR') + 1], autostart.taskCommand(),
+    'it runs node directly');
 });
 
 test('every argument is its own argv element, never a command line', { skip: !onWindows }, async () => {
@@ -95,7 +103,31 @@ test('every argument is its own argv element, never a command line', { skip: !on
     'nothing that would mean something to a shell');
 });
 
+test('it tries the windowless task first, then falls back', { skip: !onWindows }, async () => {
+  // /NP registers without a stored password, which runs with a
+  // non-interactive token and therefore shows no console window. Not every
+  // machine allows it, so a refusal falls back to the plain interactive task
+  // -- which works everywhere and does show a window. The caller is told
+  // which one it got.
+  let first = true;
+  const exec = fakeExec(() => {
+    if (first) { first = false; return { ok: false, err: 'ERROR: cannot use /NP' }; }
+    return { ok: true };
+  });
+  const res = await autostart.register(exec);
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.windowless, false, 'and it says the window will appear');
+  assert.ok(exec.calls[0].args.includes('/NP'), 'windowless was attempted first');
+  assert.ok(!exec.calls[1].args.includes('/NP'), 'the fallback drops it');
+});
+
+test('a windowless registration reports itself as such', { skip: !onWindows }, async () => {
+  const res = await autostart.register(fakeExec({ ok: true }));
+  assert.strictEqual(res.windowless, true);
+});
+
 test('a refused registration is reported, not swallowed', { skip: !onWindows }, async () => {
+  // Both attempts refused — the real reason must reach the dashboard.
   const exec = fakeExec({ ok: false, code: 1, out: '', err: 'ERROR: Access is denied.' });
   const res = await autostart.register(exec);
   assert.strictEqual(res.ok, false);

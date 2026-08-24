@@ -22,19 +22,35 @@
  * Every command goes through execFile with shell:false. Paths reach it from the
  * filesystem rather than from a user, but the rule holds everywhere in this
  * codebase and a path with a space or an ampersand should never be a bug.
+ *
+ * NO SCRIPT SHIM, deliberately, and this was measured rather than assumed.
+ * The first version launched node through a generated .vbs with a hidden
+ * window, which is the usual trick for suppressing the console. Windows
+ * Defender flagged the resulting command line as Trojan:Win32/Commando.A!ml
+ * and blocked it — correctly, because "scheduled task at logon runs a hidden
+ * script via wscript" is exactly what a dropper looks like. A setup step that
+ * raises a malware alert is worse than no feature, so the task launches
+ * node.exe directly and the console window is handled by the task's own logon
+ * type instead.
  */
 
 'use strict';
 
 const { execFile } = require('child_process');
-const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const TASK_NAME = 'ClaudeForSheets';
 const DIR = path.join(os.homedir(), '.claude-sheets');
-const LAUNCHER = path.join(DIR, 'start-hidden.vbs');
 const ENTRY = path.join(__dirname, 'index.js');
+
+/**
+ * What the task runs: this node, this entry point, each quoted because
+ * "C:\Program Files\nodejs" contains a space.
+ */
+function taskCommand() {
+  return '"' + process.execPath + '" "' + ENTRY + '"';
+}
 
 /** Only Windows for now; macOS and Linux land with the packaged builds. */
 function supported() {
@@ -63,25 +79,6 @@ function run(exe, args) {
 }
 
 /**
- * A VBScript shim, because a scheduled task running node.exe directly pops a
- * console window at every login — which nobody would tolerate and which would
- * make the whole feature worse than doing nothing. WScript.Shell.Run with a
- * window style of 0 starts it genuinely hidden.
- *
- * Regenerated on every register so the baked paths always match this install.
- */
-function launcherSource() {
-  const q = (s) => '""' + String(s).replace(/"/g, '') + '""';
-  return 'Set s = CreateObject("WScript.Shell")\r\n' +
-         's.Run "' + q(process.execPath) + ' ' + q(ENTRY) + '", 0, False\r\n';
-}
-
-function writeLauncher() {
-  fs.mkdirSync(DIR, { recursive: true });
-  fs.writeFileSync(LAUNCHER, launcherSource(), 'utf8');
-}
-
-/**
  * What the OS actually has.
  *
  * `stale` is the interesting state: a task exists under our name but runs a
@@ -102,7 +99,9 @@ async function status(exec) {
   // The XML is UTF-16 from schtasks; Node has already decoded it to a string,
   // but a stray BOM or NULs can survive. Compare on a normalized copy.
   const xml = res.out.replace(/\0/g, '');
-  const pointsHere = xml.toLowerCase().includes(LAUNCHER.toLowerCase());
+  // Stale means "runs a different copy of this app". Compare on the entry
+  // point, which is what actually identifies the install.
+  const pointsHere = xml.toLowerCase().includes(ENTRY.toLowerCase());
   return {
     supported: true,
     registered: true,
@@ -116,24 +115,28 @@ async function register(exec) {
   exec = exec || run;
   if (!supported()) return { ok: false, error: why() };
 
-  try {
-    writeLauncher();
-  } catch (e) {
-    return { ok: false, error: 'Could not write the launcher: ' + e.message };
-  }
-
   // /F replaces any existing task, which is what makes re-registering the fix
   // for a stale one. /RL LIMITED keeps it at the user's own rights: this
-  // process needs no elevation and asking for it would be a lie about scope.
-  const res = await exec('schtasks', [
-    '/Create', '/TN', TASK_NAME, '/SC', 'ONLOGON',
-    '/TR', 'wscript.exe "' + LAUNCHER + '"',
-    '/RL', 'LIMITED', '/F',
-  ]);
+  // process needs no elevation and asking for it would misstate its scope.
+  //
+  // /NP registers without storing a password, which runs the task with a
+  // non-interactive token — and therefore with no console window at all. It
+  // is tried first because it is the only windowless option that does not
+  // involve a script shim; if Windows refuses it, we fall back to the plain
+  // interactive task, which works everywhere and shows a console window.
+  const base = ['/Create', '/TN', TASK_NAME, '/SC', 'ONLOGON',
+                '/TR', taskCommand(), '/RL', 'LIMITED', '/F'];
+
+  let res = await exec('schtasks', base.concat(['/NP']));
+  let windowless = true;
+  if (!res.ok) {
+    res = await exec('schtasks', base);
+    windowless = false;
+  }
   if (!res.ok) {
     return { ok: false, error: (res.err || res.out || 'schtasks failed').trim() };
   }
-  return { ok: true };
+  return { ok: true, windowless: windowless };
 }
 
 async function unregister(exec) {
@@ -145,12 +148,11 @@ async function unregister(exec) {
   if (!res.ok && !/cannot find|does not exist/i.test(res.err + res.out)) {
     return { ok: false, error: (res.err || res.out || 'schtasks failed').trim() };
   }
-  try { fs.unlinkSync(LAUNCHER); } catch { /* already gone */ }
   return { ok: true };
 }
 
 module.exports = {
-  TASK_NAME, LAUNCHER, ENTRY,
+  TASK_NAME, ENTRY,
   supported, why, status, register, unregister,
-  launcherSource,
+  taskCommand,
 };

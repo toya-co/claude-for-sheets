@@ -408,6 +408,11 @@ const server = https.createServer(loadCerts(), async (req, res) => {
           if (!res2.ok) {
             autostartError = res2.error;
             delete body.autostart;
+          } else if (body.autostart) {
+            // Whether a console window will appear depends on which variant
+            // Windows accepted; record it so the dashboard can say so rather
+            // than guess.
+            body.autostartWindow = res2.windowless === false;
           }
         }
 
