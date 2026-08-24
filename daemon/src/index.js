@@ -21,6 +21,7 @@ const { randomBytes } = require('crypto');
 const store = require('./store');
 const claude = require('./claude');
 const dashboard = require('./dashboard');
+const autostart = require('./autostart');
 
 const PORT = Number(process.env.PORT || 8443);
 /**
@@ -379,6 +380,10 @@ const server = https.createServer(loadCerts(), async (req, res) => {
           // Without this the dashboard cannot render a control's own state,
           // and the sidebar cannot learn how much to ask about.
           settings: store.getSettings(),
+          // Queried from the OS rather than read from settings: a task can be
+          // deleted in Task Scheduler, and a cached preference would go on
+          // claiming autostart is on long after it stopped being true.
+          autostart: await autostart.status(),
         });
       }
 
@@ -392,9 +397,28 @@ const server = https.createServer(loadCerts(), async (req, res) => {
       case 'POST /settings': {
         const body = await readBody(req);
         if (!fromDashboard(req, body)) return json(res, 403, { error: 'not the dashboard' });
+
+        // Autostart is the one setting that changes something outside this
+        // process, so the OS acts FIRST and the preference is stored only if
+        // that succeeded. Storing a wish the machine refused would leave the
+        // dashboard confidently showing a state that does not exist.
+        let autostartError = null;
+        if (body.autostart !== undefined) {
+          const res2 = body.autostart ? await autostart.register() : await autostart.unregister();
+          if (!res2.ok) {
+            autostartError = res2.error;
+            delete body.autostart;
+          }
+        }
+
         // Answer with what is now true rather than what was asked for — the
         // store clamps an unrecognized askBefore back to the strictest value.
-        return json(res, 200, { ok: true, settings: store.setSettings(body) });
+        return json(res, 200, {
+          ok: !autostartError,
+          settings: store.setSettings(body),
+          autostart: await autostart.status(),
+          error: autostartError,
+        });
       }
 
       case 'POST /instructions': {

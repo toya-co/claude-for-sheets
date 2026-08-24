@@ -182,7 +182,9 @@ function page(dashToken) {
     <span class="m">Registers a per-user scheduled task &middot; no tray icon, no
     background installer</span></span>
     ${seg('auto', [['1', 'On', 'autoOn'], ['0', 'Off', 'autoOff']])}
-  </div></div>
+  </div>
+  <div class="drawer"><p class="m" id="autoNote" style="margin:0"></p></div>
+  </div>
 
   <div class="card"><div class="row">
     <span class="grow"><span class="t">Quit</span>

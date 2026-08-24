@@ -209,8 +209,19 @@ function renderSettings() {
   $('askAll').classList.toggle('on', !relaxed);
   $('askLess').classList.toggle('on', relaxed);
   if (document.activeElement !== $('globalIns')) $('globalIns').value = s.globalInstructions || '';
-  $('autoOn').classList.toggle('on', !!s.autostart);
-  $('autoOff').classList.toggle('on', !s.autostart);
+  // Autostart shows what the OS actually has, never the stored preference —
+  // the task can be deleted in Task Scheduler behind our back.
+  const auto = state.autostart || {};
+  $('autoOn').classList.toggle('on', !!auto.registered && !auto.stale);
+  $('autoOff').classList.toggle('on', !auto.registered);
+  $('autoOn').disabled = auto.supported === false;
+  $('autoOff').disabled = auto.supported === false;
+  $('autoNote').innerHTML =
+    auto.supported === false ? esc(auto.reason || 'Not available on this platform.')
+    : auto.stale ? 'A task exists but points at a different copy of the app. ' +
+        'Turn it on again to repoint it.'
+    : auto.registered ? 'Registered as a logon task, started hidden — no console window.'
+    : 'Off — after a restart you will need to start the app yourself.';
 }
 
 function flash(id) {
@@ -223,8 +234,13 @@ function flash(id) {
 async function saveSettings(patch, flashId) {
   const res = await post('/settings', patch);
   if (res && res.settings) state.settings = res.settings;
+  if (res && res.autostart) state.autostart = res.autostart;
   renderSettings();
-  if (flashId) flash(flashId);
+  // A setting the machine refused must say so. Silently snapping the toggle
+  // back reads as a broken button rather than a refusal.
+  if (res && res.error) $('autoNote').innerHTML = '<span style="color:var(--bad)">' +
+    esc(res.error) + '</span>';
+  else if (flashId) flash(flashId);
 }
 
 // -------------------------------------------------------------- setup

@@ -100,8 +100,13 @@
             : 'local app up — Claude Code not signed in';
           return true;
         } catch {
+          // No web page can start a local process, so this state is a dead end
+          // unless the message is actionable. Name the app, say how to start
+          // it, and link to the page that explains the rest.
           $('dot').classList.remove('on');
-          $('status').innerHTML = 'local app not running';
+          $('status').innerHTML = 'local app not running — ' +
+            '<a href="https://localhost:8443/" target="_blank" rel="noopener">open it</a>' +
+            ', or run <code>npm start</code>';
           return false;
         }
       }
