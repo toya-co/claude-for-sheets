@@ -1,56 +1,39 @@
 /**
  * Start at login (ARCHITECTURE.md §6, Lifecycle).
  *
- * A per-user scheduled task on Windows. No admin rights, no installer service,
- * no tray app, no bundled runtime — which keeps the "two halves, both open
- * source, nothing hosted" shape intact.
+ * A single .cmd file in the user's Startup folder. That is the whole
+ * mechanism, and the alternatives were each rejected on evidence rather than
+ * taste:
  *
- * Two things this module refuses to do, both learned from how the rest of this
- * project fails:
+ * **A scheduled task needs admin.** `schtasks /Create /SC ONLOGON` writes to
+ * the root task folder, which a UAC-filtered token cannot do — it fails with
+ * "Access is denied" from a normal shell even though the same user can create
+ * the same task through the Task Scheduler GUI, because the GUI elevates.
+ * This app must never ask for admin, so scheduled tasks are out.
  *
- * 1. **It never trusts the stored setting.** Whether the task exists is a
- *    question about the operating system, so it asks the operating system.
- *    Someone can delete the task in Task Scheduler and a cached `true` would
- *    keep insisting autostart is on. The store's value is a preference; this
- *    module reports reality.
+ * **A hidden script shim is malware-shaped.** The first attempt launched node
+ * through a generated .vbs with a hidden window. Windows Defender flagged the
+ * command line as Trojan:Win32/Commando.A!ml and blocked it, correctly:
+ * "runs a hidden script at logon" is what a dropper does. A setup step that
+ * raises a malware alert is worse than not having the feature.
  *
- * 2. **It checks the task still points HERE.** A task registered from one
- *    checkout keeps running that path after the folder moves or is deleted, so
- *    "a task with our name exists" is not the same as "autostart works". The
- *    task is read back and compared against this install.
+ * **A registry Run key is invisible.** It needs no admin, but a user who wants
+ * it gone has to know to open regedit. The Startup folder is somewhere people
+ * already know how to look, and deleting the file is a complete uninstall.
  *
- * Every command goes through execFile with shell:false. Paths reach it from the
- * filesystem rather than from a user, but the rule holds everywhere in this
- * codebase and a path with a space or an ampersand should never be a bug.
- *
- * NO SCRIPT SHIM, deliberately, and this was measured rather than assumed.
- * The first version launched node through a generated .vbs with a hidden
- * window, which is the usual trick for suppressing the console. Windows
- * Defender flagged the resulting command line as Trojan:Win32/Commando.A!ml
- * and blocked it — correctly, because "scheduled task at logon runs a hidden
- * script via wscript" is exactly what a dropper looks like. A setup step that
- * raises a malware alert is worse than no feature, so the task launches
- * node.exe directly and the console window is handled by the task's own logon
- * type instead.
+ * So: a plain file, in a documented place, starting node minimized. The window
+ * is deliberate. It is visible proof the app is running and closing it stops
+ * the app — most of what a tray icon would have given, without a GUI framework.
  */
 
 'use strict';
 
-const { execFile } = require('child_process');
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const TASK_NAME = 'ClaudeForSheets';
-const DIR = path.join(os.homedir(), '.claude-sheets');
 const ENTRY = path.join(__dirname, 'index.js');
-
-/**
- * What the task runs: this node, this entry point, each quoted because
- * "C:\Program Files\nodejs" contains a space.
- */
-function taskCommand() {
-  return '"' + process.execPath + '" "' + ENTRY + '"';
-}
+const FILE_NAME = 'Claude for Sheets.cmd';
 
 /** Only Windows for now; macOS and Linux land with the packaged builds. */
 function supported() {
@@ -65,115 +48,97 @@ function why() {
 }
 
 /**
- * Turn schtasks' terse refusals into something a person can act on.
- * "ERROR: Access is denied." on its own sends nobody anywhere useful.
+ * The per-user Startup folder.
+ *
+ * From APPDATA rather than a hardcoded path: it moves under a roaming profile,
+ * and the folder names are localized on a non-English Windows. The literal
+ * path is only a fallback for a missing variable.
  */
-function explain(raw) {
-  if (/access is denied/i.test(raw)) {
-    return 'Windows refused to create the task (access denied). This usually means ' +
-           'the app is running under a restricted shell, or your organization blocks ' +
-           'scheduled tasks by policy. Try starting the app from a normal terminal, ' +
-           'or leave this off and run npm start after a restart.';
-  }
-  if (/cannot find|does not exist/i.test(raw)) {
-    return 'Windows could not find the Task Scheduler service. Leave this off and ' +
-           'run npm start after a restart.';
-  }
-  return raw;
+function startupDir() {
+  const roaming = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  return path.join(roaming, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
 }
 
-/** Promise-wrapped execFile. Never a shell — see the note above. */
-function run(exe, args) {
-  return new Promise((resolve) => {
-    // stdin is closed and a hard timeout applies: schtasks can prompt (for a
-    // password, for a confirmation), and a prompt with nobody to answer it
-    // would hang the daemon rather than fail.
-    execFile(exe, args, { windowsHide: true, timeout: 15000,
-                          stdio: ['ignore', 'pipe', 'pipe'] }, (err, stdout, stderr) => {
-      resolve({
-        ok: !err,
-        code: err ? (err.code === undefined ? 1 : err.code) : 0,
-        out: String(stdout || ''),
-        err: String(stderr || (err && err.message) || ''),
-      });
-    });
-  });
+function scriptPath() {
+  return path.join(startupDir(), FILE_NAME);
 }
 
 /**
- * What the OS actually has.
+ * `start "<title>" /min` launches node in its own minimized window and lets
+ * the cmd shell exit immediately, so nothing lingers but the app.
  *
- * `stale` is the interesting state: a task exists under our name but runs a
- * different path — an old checkout, usually. Reported separately from "off"
- * because the fix differs: off needs turning on, stale needs re-registering.
+ * The title argument is not optional decoration: `start` treats a leading
+ * quoted string as the window title, so `start "C:\path\node.exe"` opens an
+ * empty console titled with the path and never runs anything. Giving it a real
+ * title is what makes the command work at all.
  */
-async function status(exec) {
-  exec = exec || run;
+function scriptSource() {
+  return '@echo off\r\n' +
+         'rem Claude for Sheets — starts the local app at login.\r\n' +
+         'rem Delete this file to stop it starting automatically.\r\n' +
+         'start "Claude for Sheets" /min "' + process.execPath + '" "' + ENTRY + '"\r\n';
+}
+
+/**
+ * What is actually on disk — never the stored preference.
+ *
+ * Deleting the file in Explorer is the documented way to turn this off, so a
+ * cached `true` would go on claiming autostart is on after the user had
+ * already removed it. `stale` means a file exists but launches a different
+ * copy of the app; it is reported separately from off because the fix differs.
+ */
+async function status() {
   if (!supported()) {
     return { supported: false, registered: false, stale: false, reason: why() };
   }
-
-  const res = await exec('schtasks', ['/Query', '/TN', TASK_NAME, '/XML', 'ONE']);
-  if (!res.ok) {
-    return { supported: true, registered: false, stale: false, taskName: TASK_NAME };
+  const file = scriptPath();
+  let body;
+  try {
+    body = fs.readFileSync(file, 'utf8');
+  } catch {
+    return { supported: true, registered: false, stale: false, path: file };
   }
-
-  // The XML is UTF-16 from schtasks; Node has already decoded it to a string,
-  // but a stray BOM or NULs can survive. Compare on a normalized copy.
-  const xml = res.out.replace(/\0/g, '');
-  // Stale means "runs a different copy of this app". Compare on the entry
-  // point, which is what actually identifies the install.
-  const pointsHere = xml.toLowerCase().includes(ENTRY.toLowerCase());
-  return {
-    supported: true,
-    registered: true,
-    stale: !pointsHere,
-    taskName: TASK_NAME,
-    command: (/<Command>([^<]*)<\/Command>/i.exec(xml) || [])[1] || null,
-  };
+  return { supported: true, registered: true, stale: !body.includes(ENTRY), path: file };
 }
 
-async function register(exec) {
-  exec = exec || run;
+async function register() {
   if (!supported()) return { ok: false, error: why() };
-
-  // /F replaces any existing task, which is what makes re-registering the fix
-  // for a stale one. /RL LIMITED keeps it at the user's own rights: this
-  // process needs no elevation and asking for it would misstate its scope.
-  //
-  // No /NP. It looked like the way to get a windowless task — it registers
-  // without a stored password, so the task runs non-interactively — but its
-  // own help says it "must be combined with either /RU or /XML", and with
-  // /RU schtasks can PROMPT for a password on stdin. A prompt would hang this
-  // process forever, which is a far worse failure than a visible console
-  // window. The windowless route, if it is ever wanted, is an XML task with
-  // <LogonType>S4U</LogonType>, which never prompts.
-  const res = await exec('schtasks', [
-    '/Create', '/TN', TASK_NAME, '/SC', 'ONLOGON',
-    '/TR', taskCommand(), '/RL', 'LIMITED', '/F',
-  ]);
-  if (!res.ok) {
-    return { ok: false, error: explain((res.err || res.out || 'schtasks failed').trim()) };
+  try {
+    fs.mkdirSync(startupDir(), { recursive: true });
+    fs.writeFileSync(scriptPath(), scriptSource(), 'utf8');
+  } catch (e) {
+    return { ok: false, error: explain(e) };
   }
-  // An interactive logon task shows a console window when it fires. Say so
-  // rather than let the page claim otherwise.
+  // Minimized, not hidden — the page should say so rather than claim silence.
   return { ok: true, windowless: false };
 }
 
-async function unregister(exec) {
-  exec = exec || run;
+async function unregister() {
   if (!supported()) return { ok: false, error: why() };
-
-  const res = await exec('schtasks', ['/Delete', '/TN', TASK_NAME, '/F']);
-  // Deleting something already gone is the desired end state, not a failure.
-  if (!res.ok && !/cannot find|does not exist/i.test(res.err + res.out)) {
-    return { ok: false, error: (res.err || res.out || 'schtasks failed').trim() };
+  try {
+    fs.unlinkSync(scriptPath());
+  } catch (e) {
+    // Already gone is the desired end state, not a failure.
+    if (e.code !== 'ENOENT') return { ok: false, error: explain(e) };
   }
   return { ok: true };
 }
 
+/** Turn a filesystem error into something a person can act on. */
+function explain(e) {
+  if (e && e.code === 'EACCES') {
+    return 'Windows refused to write to your Startup folder — your organization may ' +
+           'block it by policy. Leave this off and run npm start after a restart.';
+  }
+  if (e && e.code === 'ENOENT') {
+    return 'Could not find your Startup folder. Leave this off and run npm start ' +
+           'after a restart.';
+  }
+  return 'Could not write the startup file: ' + ((e && e.message) || String(e));
+}
+
 module.exports = {
-  TASK_NAME, ENTRY,
+  ENTRY, FILE_NAME,
   supported, why, status, register, unregister,
-  taskCommand,
+  startupDir, scriptPath, scriptSource,
 };

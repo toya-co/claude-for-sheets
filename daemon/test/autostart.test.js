@@ -1,204 +1,156 @@
 /**
  * Start at login.
  *
- * The command construction is tested against an injected runner rather than a
- * real `schtasks`: creating a scheduled task is a persistent change to the
- * developer's machine, and a test suite has no business making one. What can
- * be checked without touching the OS is everything that has actually gone
- * wrong in this codebase before — argv shape, shell avoidance, and a status
- * that reports reality rather than a cached wish.
+ * Three mechanisms were tried before this one, and each failure is pinned by a
+ * test here so it cannot be reintroduced by someone who does not know the
+ * history:
  *
- * The one thing no unit test can prove is that the task fires at logon. That
- * is a reboot, and it is recorded as a manual step.
+ *   1. A scheduled task — needs elevation for a logon trigger, and this app
+ *      must never ask for admin.
+ *   2. A hidden .vbs shim — Windows Defender flagged the command line as
+ *      Trojan:Win32/Commando.A!ml and blocked it. Correctly.
+ *   3. A registry Run key — works, but invisible to a user who wants it gone.
+ *
+ * What remains is a file in the Startup folder, which needs no privilege, no
+ * interpreter, and no explanation beyond "delete it".
+ *
+ * Real files are written, into a temp HOME rather than the developer's own
+ * Startup folder, so the suite never leaves something that runs at login.
  */
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cfs-autostart-'));
+process.env.APPDATA = TMP;
+
 const autostart = require('../src/autostart');
-
-/** Records what would have been run, and answers with whatever is scripted. */
-function fakeExec(reply) {
-  const calls = [];
-  const fn = async (exe, args) => {
-    calls.push({ exe, args });
-    return typeof reply === 'function' ? reply(exe, args) : (reply || { ok: true, out: '', err: '' });
-  };
-  fn.calls = calls;
-  return fn;
-}
-
-const XML_HERE = () => ({
-  ok: true,
-  out: '<Task><Actions><Exec><Command>node.exe</Command>' +
-       '<Arguments>' + autostart.taskCommand() + '</Arguments></Exec></Actions></Task>',
-  err: '',
-});
-const XML_ELSEWHERE = {
-  ok: true,
-  out: '<Task><Actions><Exec><Command>wscript.exe</Command>' +
-       '<Arguments>"C:\\Old\\Checkout\\start-hidden.vbs"</Arguments></Exec></Actions></Task>',
-  err: '',
-};
-const NOT_FOUND = { ok: false, code: 1, out: '', err: 'ERROR: The system cannot find the file specified.' };
-
 const onWindows = process.platform === 'win32';
 
-// ----------------------------------------------------- no script shim, ever
+test.beforeEach(() => { try { fs.unlinkSync(autostart.scriptPath()); } catch {} });
+test.after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {} });
 
-test('the task runs node directly, with no script interpreter', () => {
-  // Measured, not assumed: launching node through a generated .vbs with a
-  // hidden window got the command line flagged by Windows Defender as
-  // Trojan:Win32/Commando.A!ml and blocked. "Scheduled task at logon runs a
-  // hidden script via wscript" is what a dropper looks like, and a setup step
-  // that raises a malware alert is worse than not having the feature.
-  const cmd = autostart.taskCommand();
-  assert.ok(cmd.includes(process.execPath), 'it launches this exact node');
-  assert.ok(cmd.includes(autostart.ENTRY), 'and this exact entry point');
-  for (const shim of ['wscript', 'cscript', '.vbs', 'powershell', 'mshta', 'rundll32']) {
-    assert.ok(!cmd.toLowerCase().includes(shim), 'no ' + shim + ' in the command');
+// ------------------------------------------------------- never again, part 1
+
+test('it needs no elevation: no scheduled task, no schtasks', () => {
+  // schtasks /Create /SC ONLOGON writes to the root task folder, which a
+  // UAC-filtered token cannot do. It fails with "Access is denied" from a
+  // normal shell even for a user who can create the same task through the
+  // Task Scheduler GUI, because the GUI elevates.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'autostart.js'), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/schtasks/i.test(code), 'scheduled tasks require admin — never go back');
+  assert.ok(!/execFile|spawn|exec\(/.test(code),
+    'this writes a file; it should not be running processes at all');
+});
+
+test('it runs no script interpreter, because Defender flags that', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'autostart.js'), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  for (const shim of ['wscript', 'cscript', '.vbs', 'mshta', 'rundll32']) {
+    assert.ok(!new RegExp(shim, 'i').test(code), 'no ' + shim + ' — it is an AV detection');
   }
 });
 
-test('the source carries no script-shim machinery at all', () => {
-  const src = require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'src', 'autostart.js'), 'utf8');
-  const code = src.replace(/\/\*[\s\S]*?\*\//g, '');   // comments explain it; code must not do it
-  assert.ok(!/\.vbs|WScript\.Shell|wscript/i.test(code),
-    'a shim must not creep back in — it is an antivirus detection, not a style choice');
+test('it stays out of the registry, where a user cannot find it', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'autostart.js'), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/HKCU|HKEY|reg add|winreg/i.test(code),
+    'a Run key is invisible; the Startup folder is somewhere people look');
 });
 
-test('both paths are quoted, since Program Files has a space', () => {
-  const cmd = autostart.taskCommand();
-  assert.match(cmd, /^"[^"]+node\.exe" "[^"]+index\.js"$/,
-    'unquoted, the space in the node path would split the command');
+// ------------------------------------------------------------- the script
+
+test('the launcher is quoted and minimized, and start gets a real title',
+  { skip: !onWindows }, () => {
+  const cmd = autostart.scriptSource();
+  // `start` reads a leading quoted string as the WINDOW TITLE, so
+  // start "C:\path\node.exe" opens an empty console named after the path and
+  // runs nothing. The title argument is what makes the command work at all.
+  assert.match(cmd, /start "[^"]+" \/min "/,
+    'title first, then /min, then the quoted executable');
+  assert.ok(cmd.includes(process.execPath), 'launches this exact node');
+  assert.ok(cmd.includes(autostart.ENTRY), 'and this exact entry point');
+  assert.match(cmd, /\r\n/, 'CRLF — it is a batch file');
+  assert.match(cmd, /Delete this file/i, 'and it says how to undo itself');
 });
 
-// --------------------------------------------------------------- registering
+test('the file lives where Windows actually looks', { skip: !onWindows }, () => {
+  // From APPDATA rather than a hardcoded path: it moves under a roaming
+  // profile and the folder names are localized on non-English Windows.
+  assert.ok(autostart.startupDir().startsWith(TMP),
+    'honours APPDATA: ' + autostart.startupDir());
+  assert.match(autostart.scriptPath(), /Startup[\\/][^\\/]+\.cmd$/);
+});
 
-test('register creates a per-user logon task at the user\'s own rights', { skip: !onWindows }, async () => {
-  const exec = fakeExec({ ok: true });
-  const res = await autostart.register(exec);
+// ------------------------------------------------------- register / status
+
+test('register writes the file, and status reads it back', { skip: !onWindows }, async () => {
+  assert.strictEqual((await autostart.status()).registered, false, 'nothing yet');
+
+  const res = await autostart.register();
   assert.strictEqual(res.ok, true);
-
-  const { exe, args } = exec.calls[0];
-  assert.strictEqual(exe, 'schtasks');
-  assert.strictEqual(args[args.indexOf('/SC') + 1], 'ONLOGON', 'fires at logon');
-  assert.strictEqual(args[args.indexOf('/TN') + 1], autostart.TASK_NAME);
-  assert.strictEqual(args[args.indexOf('/RL') + 1], 'LIMITED',
-    'no elevation — this process needs none, and asking would misstate its scope');
-  assert.ok(args.includes('/F'), '/F replaces a stale task, which is how repointing works');
-  assert.strictEqual(args[args.indexOf('/TR') + 1], autostart.taskCommand(),
-    'it runs node directly');
-});
-
-test('every argument is its own argv element, never a command line', { skip: !onWindows }, async () => {
-  // Paths here come from the filesystem rather than a user, but the rule holds
-  // everywhere in this codebase: nothing is handed to a shell to re-parse.
-  const exec = fakeExec({ ok: true });
-  await autostart.register(exec);
-  const { args } = exec.calls[0];
-  assert.ok(Array.isArray(args));
-  assert.ok(args.every((a) => typeof a === 'string'));
-  assert.ok(!args.some((a) => a.includes('&&') || a.includes('|')),
-    'nothing that would mean something to a shell');
-});
-
-test('it never passes /NP, which can prompt for a password', { skip: !onWindows }, async () => {
-  // /NP looked like the windowless route, but its own help says it must be
-  // combined with /RU -- and with /RU schtasks can prompt on stdin. A prompt
-  // with nobody to answer it hangs the daemon, which is far worse than a
-  // visible console window.
-  const exec = fakeExec({ ok: true });
-  await autostart.register(exec);
-  assert.strictEqual(exec.calls.length, 1, 'one attempt, no fallback dance');
-  assert.ok(!exec.calls[0].args.includes('/NP'), '/NP must not be used');
-  assert.ok(!exec.calls[0].args.includes('/RP'), 'and no password is ever passed');
-});
-
-test('registration cannot hang on a prompt', () => {
-  const src = require('fs').readFileSync(
-    require('path').join(__dirname, '..', 'src', 'autostart.js'), 'utf8');
-  assert.match(src, /timeout: \d+/, 'every call has a deadline');
-  assert.match(src, /stdio: \['ignore'/, 'stdin is closed, so a prompt gets EOF');
-});
-
-test('an interactive task admits it shows a window', { skip: !onWindows }, async () => {
-  const res = await autostart.register(fakeExec({ ok: true }));
   assert.strictEqual(res.windowless, false,
-    'the page must not claim hidden when the task is interactive');
+    'minimized, not hidden — the page must not claim silence');
+  assert.ok(fs.existsSync(autostart.scriptPath()), 'the file is really there');
+
+  const after = await autostart.status();
+  assert.strictEqual(after.registered, true);
+  assert.strictEqual(after.stale, false);
 });
 
-test('a refused registration is reported, not swallowed', { skip: !onWindows }, async () => {
-  // Both attempts refused — the real reason must reach the dashboard.
-  const exec = fakeExec({ ok: false, code: 1, out: '', err: 'ERROR: Access is denied.' });
-  const res = await autostart.register(exec);
-  assert.strictEqual(res.ok, false);
-  // Bare "Access is denied." sends nobody anywhere useful, so it is explained.
-  assert.match(res.error, /access denied/i, 'the refusal survives');
-  assert.match(res.error, /npm start/,
-    'and the user is told what to do instead');
+test('status reports the file on disk, not a remembered preference',
+  { skip: !onWindows }, async () => {
+  // Deleting the file in Explorer is the documented way to turn this off, so
+  // a cached true would keep claiming autostart is on after the user removed it.
+  await autostart.register();
+  fs.unlinkSync(autostart.scriptPath());
+  assert.strictEqual((await autostart.status()).registered, false,
+    'the filesystem is the source of truth');
 });
 
-// ------------------------------------------------------------- unregistering
-
-test('unregister deletes without prompting', { skip: !onWindows }, async () => {
-  const exec = fakeExec({ ok: true });
-  const res = await autostart.unregister(exec);
-  assert.strictEqual(res.ok, true);
-  const { args } = exec.calls[0];
-  assert.ok(args.includes('/Delete') && args.includes('/F'));
-  assert.strictEqual(args[args.indexOf('/TN') + 1], autostart.TASK_NAME);
-});
-
-test('deleting a task that is already gone is success, not failure', { skip: !onWindows }, async () => {
-  const res = await autostart.unregister(fakeExec(NOT_FOUND));
-  assert.strictEqual(res.ok, true,
-    'the desired end state is "no task", and there is no task');
-});
-
-// -------------------------------------------------------------- reading state
-
-test('status asks the OS, and says nothing when there is no task', { skip: !onWindows }, async () => {
-  const exec = fakeExec(NOT_FOUND);
-  const s = await autostart.status(exec);
-  assert.deepStrictEqual(
-    { registered: s.registered, stale: s.stale },
-    { registered: false, stale: false });
-  assert.ok(exec.calls[0].args.includes('/Query'), 'it actually queried');
-});
-
-test('a task pointing at this install reads as on', { skip: !onWindows }, async () => {
-  const s = await autostart.status(fakeExec(XML_HERE()));
+test('a file left by a different copy reads as stale, not as on',
+  { skip: !onWindows }, async () => {
+  fs.mkdirSync(autostart.startupDir(), { recursive: true });
+  fs.writeFileSync(autostart.scriptPath(),
+    '@echo off\r\nstart "x" /min "node.exe" "C:\\Old\\Checkout\\index.js"\r\n');
+  const s = await autostart.status();
   assert.strictEqual(s.registered, true);
-  assert.strictEqual(s.stale, false);
+  assert.strictEqual(s.stale, true, 'it launches something else entirely');
 });
 
-test('a task left behind by a different copy reads as stale, not as on', { skip: !onWindows }, async () => {
-  // "A task with our name exists" is not "autostart works". Moving the folder
-  // leaves a task launching a path that no longer exists, and reporting that
-  // as On would be the dashboard lying about something it can check.
-  const s = await autostart.status(fakeExec(XML_ELSEWHERE));
-  assert.strictEqual(s.registered, true);
-  assert.strictEqual(s.stale, true, 'points somewhere else');
+test('re-registering repoints a stale file', { skip: !onWindows }, async () => {
+  fs.mkdirSync(autostart.startupDir(), { recursive: true });
+  fs.writeFileSync(autostart.scriptPath(), 'old junk');
+  await autostart.register();
+  assert.strictEqual((await autostart.status()).stale, false);
 });
 
-test('status survives the UTF-16 NULs schtasks emits', { skip: !onWindows }, async () => {
-  const noisy = XML_HERE();
-  noisy.out = '\ufeff' + noisy.out.split('').join('\0');
-  const s = await autostart.status(fakeExec(noisy));
-  assert.strictEqual(s.stale, false, 'a BOM and interleaved NULs must not read as stale');
+// -------------------------------------------------------------- unregister
+
+test('unregister removes the file', { skip: !onWindows }, async () => {
+  await autostart.register();
+  assert.strictEqual((await autostart.unregister()).ok, true);
+  assert.ok(!fs.existsSync(autostart.scriptPath()));
 });
 
-// ------------------------------------------------------------- other platforms
+test('unregistering something already gone is success', { skip: !onWindows }, async () => {
+  const res = await autostart.unregister();
+  assert.strictEqual(res.ok, true, 'the desired end state is "no file", and there is none');
+});
+
+// ------------------------------------------------------------ other platforms
 
 test('an unsupported platform says so instead of pretending', () => {
   if (onWindows) {
-    assert.strictEqual(autostart.why(), null, 'supported here');
+    assert.strictEqual(autostart.why(), null);
     return;
   }
   assert.strictEqual(autostart.supported(), false);
-  assert.match(autostart.why(), /npm start/,
-    'and tells the user what to do meanwhile');
+  assert.match(autostart.why(), /npm start/, 'and says what to do meanwhile');
 });
 
 test('an unsupported platform never claims to have registered anything', async () => {

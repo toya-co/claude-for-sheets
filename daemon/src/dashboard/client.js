@@ -218,12 +218,10 @@ function renderSettings() {
   $('autoOff').disabled = auto.supported === false;
   $('autoNote').innerHTML =
     auto.supported === false ? esc(auto.reason || 'Not available on this platform.')
-    : auto.stale ? 'A task exists but points at a different copy of the app. ' +
+    : auto.stale ? 'A startup file exists but launches a different copy of the app. ' +
         'Turn it on again to repoint it.'
-    : auto.registered ? 'Registered as a logon task.' +
-        (state.settings && state.settings.autostartWindow
-          ? ' A console window appears at login — closing it stops the app.'
-          : ' It starts with no console window.')
+    : auto.registered ? 'A startup file is in place. The app opens minimized at ' +
+        'login — closing that window stops it. Deleting the file turns this off too.'
     : 'Off — after a restart you will need to start the app yourself.';
 }
 
