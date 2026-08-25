@@ -1,7 +1,7 @@
 {
   "name": "claude-sheets-sidebar",
-  "version": "0.2.0",
-  "description": "Claude chat sidebar for Google Sheets — Apps Script add-on plus a local companion app.",
+  "version": "1.0.0",
+  "description": "Claude chat sidebar for Google Sheets \u2014 Apps Script add-on plus a local companion app.",
   "license": "Apache-2.0",
   "private": true,
   "scripts": {
@@ -11,5 +11,13 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/toya-co/claude-for-sheets.git"
+  },
+  "homepage": "https://github.com/toya-co/claude-for-sheets#readme",
+  "bugs": {
+    "url": "https://github.com/toya-co/claude-for-sheets/issues"
   }
 }

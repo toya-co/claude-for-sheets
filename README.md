@@ -26,7 +26,7 @@ Two halves. The local app once per machine, the add-on once per spreadsheet.
 ### 1. The local app
 
 ```bash
-git clone <this repo> && cd claude-sheets-sidebar/daemon
+git clone https://github.com/toya-co/claude-for-sheets.git && cd claude-for-sheets/daemon
 npm run certs     # once — makes the loopback certificate
 npm start
 ```
