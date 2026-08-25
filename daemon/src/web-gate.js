@@ -1,5 +1,5 @@
 /**
- * The web-access gate — a Claude Code PreToolUse hook (ARCHITECTURE.md §M5.5).
+ * The web-access gate — a Claude Code PreToolUse hook.
  *
  * The CLI runs this before every WebSearch/WebFetch call. It relays the request
  * to the daemon over loopback HTTPS; the daemon relays it to the sidebar over

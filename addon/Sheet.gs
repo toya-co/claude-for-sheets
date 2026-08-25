@@ -14,7 +14,8 @@
  *
  * So the choice is the broad `spreadsheets` scope with a working restorable
  * history, or the narrow scope with agent edits tangled into the user's own undo
- * stack. Decided: broad scope. Documented in ARCHITECTURE.md §1 and stated
+ * stack. Decided: broad scope. Explained under "The permission it asks for"
+ * in the README, and stated
  * plainly in the README, because it is a real thing to ask of a user.
  *
  * Sheet I/O. The only file that touches SpreadsheetApp.
@@ -117,7 +118,7 @@ function sheetManifest_() {
 
 /**
  * Full cell data for one tab, bounded. Two tiers by design: the manifest above
- * goes on every turn, this only for the tab in play. See ARCHITECTURE.md §11
+ * goes on every turn, this only for the tab in play. See
  * (multi-tab / context strategy).
  *
  * Bounded because getDataRange() on a large sheet produces a payload big enough

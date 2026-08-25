@@ -6,7 +6,7 @@
  * spreadsheets, settings, activity — is rendered in client.js instead.
  *
  * Written from the user's side of the screen. The same facts live in
- * ARCHITECTURE.md in engineering terms; this is the version a person reading
+ * The same ground the README covers in engineering terms; this is the version a person reading
  * their own dashboard needs, and it is the only place most users will ever
  * encounter them.
  *

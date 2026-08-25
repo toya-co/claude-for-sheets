@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
- * Release preflight — Tier 2 and Tier 3 of the regression suite
- * (`experiments/README.md`).
+ * Release preflight: the automated pass, then the manual one.
  *
  * The suite splits in two and the split is not a shortcoming to engineer away:
  * some of this product rests on behavior only observable in a browser signed
@@ -293,6 +292,7 @@ function appendLog(env, outcome, note) {
       'worked stops working, the cause is usually that one of these moved — and',
       'without the record there is no way to tell which.', '', '---', '', ''].join('\n');
   }
+  fs.mkdirSync(path.dirname(LOG), { recursive: true });   // untracked dir; may not exist in a fresh clone
   fs.writeFileSync(LOG, spliceNewest_(body, entry), 'utf8');
   return LOG;
 }

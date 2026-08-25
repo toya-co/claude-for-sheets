@@ -11,3 +11,9 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Internal design record and the Phase 0 probe harnesses. Kept locally, not
+# published: the README carries everything a user or an installer needs, and
+# these are the backend working notes behind it.
+ARCHITECTURE.md
+experiments/

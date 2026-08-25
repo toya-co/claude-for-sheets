@@ -1,5 +1,5 @@
 /**
- * The dashboard: docs and control panel in one page (ARCHITECTURE.md §6).
+ * The dashboard: docs and control panel in one page.
  *
  * This is the app's front door. Pairing approval happens here and cannot move
  * — CORS cannot be an auth boundary, so approval is confirmed out-of-band in a

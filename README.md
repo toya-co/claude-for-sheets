@@ -79,7 +79,7 @@ Apps Script hosts the sidebar and does all sheet I/O. The sidebar talks over HTT
 
 History lives in a hidden `__claude_history__` sheet inside your spreadsheet, so snapshots never leave the file, travel with it when shared, and restore even with the app closed.
 
-Full design in [`ARCHITECTURE.md`](ARCHITECTURE.md). The op contract both halves depend on is [`shared/protocol.md`](shared/protocol.md).
+More detail under **Under the hood** below. The op contract both halves depend on is [`shared/protocol.md`](shared/protocol.md).
 
 ## Updating
 
@@ -116,7 +116,6 @@ daemon/          Local app — credential, loopback API, dashboard
   src/dashboard/     The dashboard page
 
 shared/          Op protocol — the contract both halves depend on
-experiments/     Platform probes; re-run before releases
 ```
 
 Apps Script shares one global scope across every file in a project, which is why `dist/Claude.gs` exists and why the paste install is two files rather than five.
@@ -125,7 +124,7 @@ Apps Script shares one global scope across every file in a project, which is why
 
 ## Under the hood
 
-Everything below is reference. You can install and use this without reading any of it. The design rationale lives in [`ARCHITECTURE.md`](ARCHITECTURE.md); this is the operating detail.
+Everything below is reference. You can install and use this without reading any of it.
 
 <details>
 <summary><b>The local app's HTTP API</b></summary>

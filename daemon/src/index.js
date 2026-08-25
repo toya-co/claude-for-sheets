@@ -458,7 +458,7 @@ const server = https.createServer(loadCerts(), async (req, res) => {
        * that a page could use to weaken a protection.
        *
        * Model only, deliberately. `askBefore` and `webAccess` are protections
-       * rather than preferences (ARCHITECTURE.md §11.6) and stay behind the
+       * rather than preferences, and stay behind the
        * dashboard token: a page that could turn the confirmation gate off is
        * the whole reason the sidebar has no token. They are returned here for
        * display and ignored on the way in.

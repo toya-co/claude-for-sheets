@@ -3,7 +3,7 @@
  *
  * The activity index is what makes the dashboard work across files without any
  * Google scope — the daemon served every turn, so it already knows what it did
- * and where. See ARCHITECTURE.md §6.
+ * and where.
  *
  * Snapshot payloads are deliberately NOT here. They live in a hidden sheet
  * inside the user's own spreadsheet so restore works with the daemon closed.

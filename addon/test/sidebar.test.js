@@ -222,7 +222,7 @@ test('an auto-allowed search still leaves a card behind', () => {
 
 test('standing permission is per sidebar, not stored anywhere', () => {
   // It must not become daemon state: the sidebar is the injectable half, so a
-  // rule it can set is a rule a hostile page can aim at (ARCHITECTURE 11.6).
+  // rule it can set is a rule a hostile page can aim at.
   assert.ok(/let autoAllowSearch = false/.test(code), 'it starts off every load');
   assert.ok(!/POST[\s\S]{0,80}autoAllowSearch/.test(code) &&
             !/autoAllowSearch[\s\S]{0,80}\/settings/.test(code),
@@ -336,7 +336,7 @@ test('the sidebar edits the preference and never the protections', () => {
   // Model is a preference. askBefore and webAccess are protections: POST
   // /settings requires the dashboard token, which the sidebar does not have and
   // must not get — CORS cannot be an auth boundary, so any page knowing a
-  // paired spreadsheet id could otherwise disable the gate (ARCHITECTURE 11.6).
+  // paired spreadsheet id could otherwise disable the gate.
   //
   // Scoped to the whole script rather than to one function, on purpose: what
   // matters is that no code path anywhere writes a protection.

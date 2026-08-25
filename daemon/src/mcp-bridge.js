@@ -1,5 +1,5 @@
 /**
- * The MCP seam, made real (ARCHITECTURE.md §7).
+ * The MCP seam, made real.
  *
  * A stdio MCP server the Claude Code CLI spawns for each turn. It owns no
  * logic: every tool call is forwarded to the daemon over loopback HTTPS, the

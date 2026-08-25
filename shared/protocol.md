@@ -12,7 +12,7 @@ protocol.
 
 **Keep it transport-agnostic.** The same vocabulary runs over `google.script.run`
 today and over the Sheets REST API in the headless/MCP path later
-(`ARCHITECTURE.md` §7). Anything Apps-Script-shaped that leaks into these
+(see the README, **Isolation**). Anything Apps-Script-shaped that leaks into these
 definitions is a migration paid for twice.
 
 ---

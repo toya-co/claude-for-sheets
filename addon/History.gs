@@ -4,7 +4,7 @@
  *
  * Restorable edit history.
  *
- * Two stores, split by role (ARCHITECTURE.md §4):
+ * Two stores, split by role:
  *   - payloads → a hidden sheet inside this spreadsheet. Never leaves the file,
  *     travels with it when shared, and restores with the local app closed. Undo
  *     is a safety feature; it must not depend on a running process.

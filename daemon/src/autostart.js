@@ -1,5 +1,5 @@
 /**
- * Start at login (ARCHITECTURE.md §6, Lifecycle).
+ * Start at login.
  *
  * A single .cmd file in the user's Startup folder. That is the whole
  * mechanism, and the alternatives were each rejected on evidence rather than

@@ -5,7 +5,7 @@
  * eighteen others still available — CronCreate, Workflow, SendMessage, Skill,
  * RemoteTrigger among them — because a denylist can only exclude what existed
  * when it was written, and this CLI is not ours to freeze. Nothing errored;
- * ARCHITECTURE.md simply claimed "no tools at all" and was wrong.
+ * The docs simply claimed "no tools at all" and were wrong.
  *
  * So these assert the shape rather than the outcome, which is what a unit test
  * can honestly check: that the arguments are an allowlist of nothing. Whether
