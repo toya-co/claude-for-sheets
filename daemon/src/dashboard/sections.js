@@ -247,14 +247,26 @@ const setupDocs = () => `
   than in your account. A new sheet made from the template needs nothing. An existing
   sheet needs the add-on added once.</p>
 
-  <h3>With clasp</h3>
-  <p>From a clone of the repo:</p>
-  <p><code>cd addon &amp;&amp; clasp push</code></p>
+  <h3>With clasp &mdash; one command</h3>
+  <p>From a clone of the repo: <code>cd addon &amp;&amp; clasp push</code></p>
 
-  <h3>By hand</h3>
-  <p>Extensions &#9656; Apps Script, then paste each file from <code>addon/</code>.
-  The two HTML files must be named exactly <code>Sidebar</code> and
-  <code>Diagnostic</code>. Reload the spreadsheet tab afterwards.</p>
+  <h3>By hand &mdash; two files and a toggle</h3>
+  <p>Apps Script shares one scope across every script file, so the whole add-on
+  ships as a single generated file.</p>
+  <ol>
+    <li><strong>Extensions &#9656; Apps Script</strong></li>
+    <li>Paste <code>addon/dist/Claude.gs</code> over the default
+      <code>Code.gs</code></li>
+    <li>Add an HTML file named exactly <code>Sidebar</code> and paste
+      <code>addon/Sidebar.html</code> into it</li>
+    <li><strong>Services</strong> &#9656; add <strong>Google Sheets API</strong>
+      &mdash; needed for borders and conditional formatting, which Apps Script
+      can write but not read back</li>
+    <li>Save, reload the spreadsheet tab, then <strong>Claude &#9656; Open
+      sidebar</strong> and authorize</li>
+  </ol>
+  <p>The HTML file has to stay separate because the sidebar is loaded by name.
+  <code>Diagnostic.html</code> is a development tool and is not needed.</p>
 
   <div class="note">
     <strong>Why there is no install-once-everywhere.</strong> Google only lets code

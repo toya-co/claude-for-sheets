@@ -12,6 +12,12 @@
 test/**
 **/*.test.js
 
+# The bundler and its output. bundle.js is Node code for the same reason the
+# tests are, and dist/Claude.gs is every other .gs concatenated -- pushing it
+# would define every function twice in one shared namespace.
+bundle.js
+dist/**
+
 # Local-only config: .clasp.json holds your own script ID.
 .clasp.json
 .clasp.json.example

@@ -64,8 +64,10 @@ signed in.
 1. `cd daemon && npm run certs && npm start`, then open
    **https://localhost:8443/** once and accept the self-signed certificate.
 2. Open a spreadsheet → **Extensions ▸ Apps Script**.
-3. Copy in every file from `addon/` (the HTML files must be named exactly
-   `Sidebar` and `Diagnostic`). Or `clasp push` if you have it set up.
+3. Add the add-on: `cd addon && clasp push`, or by hand — paste
+   `addon/dist/Claude.gs` over the default `Code.gs`, add an HTML file named
+   exactly `Sidebar` with the contents of `addon/Sidebar.html`, then
+   **Services ▸ Google Sheets API**. Two files and a toggle.
 4. Save, reload the spreadsheet tab, then **Claude ▸ Open sidebar** and authorize.
 5. Ask for a change — "put today's total in B7". The first request for a new
    spreadsheet waits for you to approve it on the dashboard.
