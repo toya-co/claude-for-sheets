@@ -110,7 +110,10 @@ async function automated() {
   // injection fix), so npm is never invoked here. Run the test files directly
   // and build the bundle in-process -- fewer moving parts, and faster.
   const testFiles = [];
-  for (const dir of [path.join(ROOT, 'daemon', 'test'), path.join(ROOT, 'addon', 'test')]) {
+  // Keep in step with the `test` script in package.json — a directory missing
+  // here is a suite the release gate silently does not run.
+  for (const dir of [path.join(ROOT, 'daemon', 'test'), path.join(ROOT, 'addon', 'test'),
+                     path.join(ROOT, 'scripts', 'test')]) {
     for (const f of fs.readdirSync(dir)) {
       if (f.endsWith('.test.js')) testFiles.push(path.join(dir, f));
     }
@@ -202,9 +205,17 @@ const MANUAL = [
    'Ask it to fetch https://127.0.0.1:' + PORT + '/status',
    'No approval card at all — it is refused outright and Claude reports it. If a card appears for this, the SSRF check regressed.'],
 
+  ['Stop ends a turn mid-flight',
+   'Ask for something long, then click Stop (or press Escape) while it is working',
+   'The button reads Stop while running and Send again after. The bubble says "Stopped." Anything already written stays written and is undoable from history; nothing new lands after the click.'],
+
+  ['A stopped turn leaves nothing running',
+   'After the step above, ask a normal question in the same sheet',
+   'It answers normally and remembers the conversation. In the local app console, "turn stopped by the sidebar" appears once — no leftover process, no second answer arriving late.'],
+
   ['The dashboard reflects reality',
    'Open https://localhost:' + PORT + '/ and check Activity',
-   'The turns above appear, newest first, and most say "resumed".'],
+   'The turns above appear, newest first, and most say "resumed". The stopped turn reads "stopped", not red and not "turn failed".'],
 ];
 
 function manual() {
@@ -217,6 +228,23 @@ function manual() {
 }
 
 // ------------------------------------------------------------------ record
+
+/**
+ * Put a new entry directly under the header rule, newest first — the project
+ * convention for every dated log.
+ *
+ * CRLF-tolerant, and it must stay that way. The LF-only `indexOf('---\n\n')`
+ * that was here returned -1 against this file's Windows line endings, and the
+ * `+ 5` that followed turned that miss into offset 4: a valid-looking position
+ * four characters into the title. The entry spliced into the middle of the word
+ * and the header lost its first line. A miss now appends, which is wrong-order
+ * at worst rather than corrupting.
+ */
+function spliceNewest_(body, entry) {
+  const m = /---\r?\n\r?\n/.exec(body);
+  const at = m ? m.index + m[0].length : body.length;
+  return body.slice(0, at) + entry + body.slice(at);
+}
 
 function appendLog(env, outcome, note) {
   const rows = Object.entries(env).map(([k, v]) => '| ' + k + ' | `' + v + '` |').join('\n');
@@ -242,15 +270,18 @@ function appendLog(env, outcome, note) {
       'worked stops working, the cause is usually that one of these moved — and',
       'without the record there is no way to tell which.', '', '---', '', ''].join('\n');
   }
-  // Newest first, per the project convention for dated logs.
-  const at = body.indexOf('---\n\n') + 5;
-  fs.writeFileSync(LOG, body.slice(0, at) + entry + body.slice(at), 'utf8');
+  fs.writeFileSync(LOG, spliceNewest_(body, entry), 'utf8');
   return LOG;
 }
 
 // -------------------------------------------------------------------- main
 
+module.exports = { spliceNewest_ };
+
 (async () => {
+  // Requiring this file is a test reading spliceNewest_, not a request to run
+  // the whole check — which would spawn the suite and then call process.exit.
+  if (require.main !== module) return;
   const env = environment();
 
   console.log('\n' + bold('Environment'));

@@ -96,12 +96,19 @@ const gates = new Map();
 function relayGate(turn, tool, detail) {
   return new Promise((resolve) => {
     const gateId = randomBytes(16).toString('hex');
+    // Stopping the turn denies the gate, for the same reason silence does.
+    const cancel = () => {
+      clearTimeout(timer);
+      gates.delete(gateId);
+      resolve({ ok: true, allow: false, stopped: true });
+    };
     const timer = setTimeout(() => {
       gates.delete(gateId);
       resolve({ ok: true, allow: false, timedOut: true });
     }, GATE_TIMEOUT_MS);
 
-    gates.set(gateId, { resolve, timer });
+    gates.set(gateId, { resolve, timer, turn, cancel });
+    turn.pending.add(cancel);
     turn.send({ type: 'gate', gateId, tool, detail });
   });
 }
@@ -111,6 +118,7 @@ function settleGate(gateId, allow) {
   if (!gate) return false;
   clearTimeout(gate.timer);
   gates.delete(gateId);
+  if (gate.turn) gate.turn.pending.delete(gate.cancel);
   gate.resolve({ ok: true, allow: Boolean(allow) });
   return true;
 }
@@ -121,12 +129,21 @@ function settleGate(gateId, allow) {
 function relayToolCall(turn, name, args) {
   return new Promise((resolve) => {
     const callId = randomBytes(16).toString('hex');
+    // The turn was stopped while this call was out. Answer it rather than
+    // leaving a five-minute timer holding a turn that no longer exists — the
+    // CLI is being killed anyway, and an unanswered call is what wedges it.
+    const cancel = () => {
+      clearTimeout(timer);
+      toolCalls.delete(callId);
+      resolve({ ok: false, error: 'The turn was stopped.' });
+    };
     const timer = setTimeout(() => {
       toolCalls.delete(callId);
       resolve({ ok: false, error: 'The sidebar did not answer within 5 minutes. The user may have closed it, or left a confirmation unanswered.' });
     }, TOOL_CALL_TIMEOUT_MS);
 
-    toolCalls.set(callId, { resolve, timer });
+    toolCalls.set(callId, { resolve, timer, turn, cancel });
+    turn.pending.add(cancel);
     turn.send({ type: 'tool_call', callId, name, args });
   });
 }
@@ -136,6 +153,7 @@ function settleToolCall(callId, result) {
   if (!call) return false;
   clearTimeout(call.timer);
   toolCalls.delete(callId);
+  if (call.turn) call.turn.pending.delete(call.cancel);
   call.resolve({ ok: true, result });
   return true;
 }
@@ -267,7 +285,28 @@ async function handleTurn(req, res) {
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
   });
-  const send = (ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`);
+  // Stop, a closed tab, a reload — all of them reach here as the response
+  // closing. The turn is over the moment the sidebar stops listening: it is the
+  // sidebar that executes every tool call, so a turn nobody is reading can only
+  // sit waiting for answers that will never come.
+  // Declared here, not at the tool loop below, because the close handler reads
+  // it and the sidebar can hang up before the loop is ever reached.
+  const turnToken = randomBytes(24).toString('hex');
+  const control = {};
+  let clientGone = false;
+  res.on('close', () => {
+    if (res.writableFinished) return;   // the ordinary end of a finished turn
+    clientGone = true;
+    const turn = turns.get(turnToken);
+    if (turn) [...turn.pending].forEach((cancel) => cancel());
+    if (control.stop) control.stop();
+    console.log('turn stopped by the sidebar');
+  });
+
+  const send = (ev) => {
+    if (clientGone || res.writableEnded) return;
+    res.write(`data: ${JSON.stringify(ev)}\n\n`);
+  };
 
   if (!store.isPaired(spreadsheetId)) {
     send({ type: 'pairing_required', spreadsheetName });
@@ -294,8 +333,10 @@ async function handleTurn(req, res) {
   // The tool loop: this turn's CLI process gets an MCP server (mcp-bridge.js)
   // whose every call lands back here, tagged with a token only that bridge
   // holds, and is relayed to this SSE stream for the sidebar to execute.
-  const turnToken = randomBytes(24).toString('hex');
-  turns.set(turnToken, { send });
+  // `pending` holds a canceller per outstanding call so stopping the turn can
+  // settle them instead of leaving their timers to outlive it.
+  turns.set(turnToken, { send, pending: new Set() });
+  if (clientGone) return res.end();   // hung up during pairing
   const mcpConfig = {
     mcpServers: {
       sheets: {
@@ -320,6 +361,7 @@ async function handleTurn(req, res) {
     // from the CLI's environment and calls /gate with it.
     webAccess: settings.webAccess !== false,
     env: { SHEETS_TURN_TOKEN: turnToken, SHEETS_DAEMON_PORT: String(PORT) },
+    control,
   });
   turns.delete(turnToken);
 
@@ -333,10 +375,13 @@ async function handleTurn(req, res) {
   store.recordActivity({
     spreadsheetId,
     spreadsheetName: spreadsheetName || '(unnamed)',
-    summary: result.ok
+    summary: result.ok || result.stopped
       ? `${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}`
       : 'turn failed',
     ok: result.ok,
+    // A stopped turn is not a failed one, and the ledger says so — the cost is
+    // real and the prompt is worth keeping, it just ended when the user said so.
+    stopped: Boolean(result.stopped),
     costUsd: result.costUsd || 0,
     elapsedMs: Date.now() - started,
     // The M4.5 signal, kept per turn so the dashboard can show it: on a resumed

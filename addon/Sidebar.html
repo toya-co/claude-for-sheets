@@ -218,6 +218,15 @@
         background:var(--live); color:var(--on-accent); cursor:pointer;
       }
       button.send:disabled { opacity:.45; cursor:default; }
+      /* Same button, second job. At 300px the composer row has space for one
+         control, and a greyed-out Send beside a live Stop reads as two. */
+      button.send.stop {
+        background:transparent; color:var(--fg); border-color:var(--rule);
+      }
+      button.send.stop::before {
+        content:''; display:inline-block; width:8px; height:8px; margin-right:7px;
+        background:var(--bad); border-radius:2px; vertical-align:baseline;
+      }
 
       ::-webkit-scrollbar { width:10px; }
       ::-webkit-scrollbar-thumb {
@@ -768,12 +777,39 @@
       // never arrive, instead of leaving the composer disabled.
       let turnAbort = null;
 
+      // Send and Stop are the same button. `turnAbort` is the single source of
+      // truth for which one it currently is, so there is no state to keep in
+      // sync — if a turn is in flight, the button stops it.
+      function setSending(on) {
+        const b = $('send');
+        b.textContent = on ? 'Stop' : 'Send';
+        b.classList.toggle('stop', on);
+        b.title = on ? 'Stop this turn' : '';
+      }
+
+      // Aborting the fetch closes the stream, and the daemon reads that as the
+      // end of the turn: it kills the CLI and settles anything it was waiting
+      // on. Work already written to the sheet stays written — Stop ends the
+      // turn, it does not undo it — and each op is its own history entry.
+      function stopTurn() {
+        if (!turnAbort) return;
+        turnAbort.abort();
+        turnAbort = null;
+      }
+
       async function send() {
+        if (turnAbort) return;            // a turn is running; the button stops it
         const text = $('prompt').value.trim();
         if (!text) return;
         $('prompt').value = '';
         autoGrow();
-        $('send').disabled = true;
+        // Armed before the first await, not at the fetch: refreshContext is a
+        // round trip to Apps Script, and Stop has to work during it. The local
+        // handle is what the fetch reads, so stopTurn clearing the shared one
+        // cannot leave this line reading a null.
+        const ac = new AbortController();
+        turnAbort = ac;
+        setSending(true);
         addMsg('user', '<b>You</b><div class="bubble">' + esc(text) + '</div>');
 
         await refreshContext();
@@ -783,10 +819,9 @@
         let acc = '';
 
         try {
-          turnAbort = new AbortController();
           const res = await fetch(DAEMON + '/turn', {
             method: 'POST',
-            signal: turnAbort.signal,
+            signal: ac.signal,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               spreadsheetId: ctx && ctx.spreadsheetId,
@@ -843,7 +878,7 @@
           }
         } finally {
           turnAbort = null;
-          $('send').disabled = false;
+          setSending(false);
         }
       }
 
@@ -882,8 +917,8 @@
         // Recover the UI first and unconditionally. New chat is the escape hatch
         // from a wedged turn, so it has to work when nothing else does — before
         // any check that could return early, and before any await that could throw.
-        if (turnAbort) { turnAbort.abort(); turnAbort = null; }
-        $('send').disabled = false;
+        stopTurn();
+        setSending(false);
         guardState = null;
         $('log').innerHTML = '';
 
@@ -922,10 +957,13 @@
       }
       $('prompt').addEventListener('input', autoGrow);
 
-      $('send').onclick = send;
+      $('send').onclick = () => (turnAbort ? stopTurn() : send());
       // Enter sends; Shift+Enter makes a newline. Chat convention, and the
       // textarea would otherwise insert a line break before send() ever ran.
       $('prompt').addEventListener('keydown', (e) => {
+        // Escape stops a running turn. The button is the discoverable route;
+        // this is for the hand already on the keyboard after a mistyped send.
+        if (e.key === 'Escape' && turnAbort) { e.preventDefault(); return stopTurn(); }
         if (e.key !== 'Enter' || e.shiftKey) return;
         // Mid-composition Enter commits an IME candidate — never a send.
         if (e.isComposing || e.keyCode === 229) return;

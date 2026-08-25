@@ -150,28 +150,63 @@ test('New chat recovers the composer before anything that can fail', () => {
   const handler = code.slice(code.indexOf("$('newChat').onclick"));
   const fn = handler.slice(0, handler.indexOf("\n      $('toggleHist')"));
 
-  const reEnable = fn.indexOf("$('send').disabled = false");
+  const reEnable = fn.indexOf('setSending(false)');
   const earlyReturn = fn.indexOf('return;');
   const firstAwait = fn.indexOf('await');
 
-  assert.ok(reEnable !== -1, 'New chat re-enables Send');
+  assert.ok(reEnable !== -1, 'New chat puts the button back to Send');
   assert.ok(earlyReturn === -1 || reEnable < earlyReturn,
     'Send is re-enabled before any early return');
   assert.ok(firstAwait === -1 || reEnable < firstAwait,
     'Send is re-enabled before any await that could throw');
-  assert.ok(fn.includes('turnAbort'), 'New chat abandons a turn still in flight');
+  assert.ok(fn.includes('stopTurn()'), 'New chat abandons a turn still in flight');
+  assert.ok(fn.indexOf('stopTurn()') < reEnable,
+    'the turn is stopped before the button is put back, not after');
 });
 
 test('a turn in flight can be aborted', () => {
   assert.ok(code.includes('new AbortController()'), 'the turn carries an abort controller');
-  assert.ok(code.includes('signal: turnAbort.signal'), 'the fetch honours it');
+  assert.ok(code.includes('signal: ac.signal'), 'the fetch honours it');
   assert.ok(/AbortError/.test(code), 'an abort is not reported as a daemon failure');
-  assert.ok(/finally\s*\{[\s\S]{0,120}?\$\('send'\)\.disabled = false/.test(code),
-    'the composer is re-enabled in a finally, whatever happened');
+  assert.ok(/finally\s*\{[\s\S]{0,120}?setSending\(false\)/.test(code),
+    'the composer is restored in a finally, whatever happened');
+});
+
+test('Send becomes Stop while a turn is running', () => {
+  // One button, two jobs, and `turnAbort` decides which — so there is no second
+  // piece of state to fall out of step with the turn.
+  assert.ok(/\$\('send'\)\.onclick\s*=\s*\(\)\s*=>\s*\(turnAbort \? stopTurn\(\) : send\(\)\)/.test(code),
+    'the button stops a running turn and sends otherwise');
+  assert.ok(/function setSending\([\s\S]{0,200}?'Stop' : 'Send'/.test(code),
+    'the label follows the state');
+
+  const fn = code.slice(code.indexOf('function stopTurn'));
+  assert.ok(/turnAbort\.abort\(\)/.test(fn.slice(0, 300)),
+    'stopping aborts the fetch, which is what the daemon reads as the end of the turn');
+
+  // Re-entry is the failure that matters: a second send() over a live turn would
+  // orphan the first stream and leave two turns writing to one sheet.
+  const send = code.slice(code.indexOf('async function send()'));
+  assert.ok(/async function send\(\)\s*\{\s*if \(turnAbort\) return/.test(send),
+    'send() refuses while a turn is in flight');
+
+  // Armed before the first await, or Stop does nothing during refreshContext.
+  const body = send.slice(0, send.indexOf('try {'));
+  assert.ok(body.indexOf('turnAbort = ac') < body.indexOf('await'),
+    'the controller exists before the first await');
+});
+
+test('Escape stops a turn but never sends one', () => {
+  const handler = code.slice(code.indexOf("$('prompt').addEventListener('keydown'"));
+  const fn = handler.slice(0, handler.indexOf('});') + 3);
+  assert.ok(/e\.key === 'Escape' && turnAbort/.test(fn),
+    'Escape only acts when there is a turn to stop');
+  assert.ok(fn.indexOf('Escape') < fn.indexOf("e.key !== 'Enter'"),
+    'Escape is handled before the Enter path can claim the event');
 });
 
 test('Enter sends and Shift+Enter makes a newline', () => {
-  const handler = code.slice(code.indexOf("$('prompt').addEventListener"));
+  const handler = code.slice(code.indexOf("$('prompt').addEventListener('keydown'"));
   const fn = handler.slice(0, handler.indexOf('});') + 3);
 
   assert.ok(/e\.key !== 'Enter' \|\| e\.shiftKey/.test(fn), 'Shift+Enter falls through to the textarea');

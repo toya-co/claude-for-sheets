@@ -124,6 +124,14 @@ startup cost is read from cache instead of paid again. **New chat** ends it. The
 transcript lives in Claude Code's own store under a neutral workspace path — not
 mixed into your coding history.
 
+**A turn can be stopped.** Send becomes **Stop** while Claude is working, and
+Escape does the same from the keyboard. Stopping closes the stream, which is
+what the local app reads as the end of the turn: it ends the CLI process and
+answers anything still outstanding, so nothing arrives late and nothing is left
+running. Work already written to the sheet stays written — Stop ends the turn,
+it does not reverse it — and each edit is still its own history entry. The
+conversation survives, so you can correct yourself and carry on.
+
 **History lives in your spreadsheet.** Snapshots go to a hidden
 `__claude_history__` sheet, so they never leave the file, travel with it when
 shared, and restore even with the daemon closed. A safety feature should not have

@@ -362,7 +362,14 @@ function attempt_(prompt, emit, opts, sessionId, resuming) {
   return new Promise((resolve) => {
     const args = buildArgs_(prompt, opts, sessionId, resuming);
 
-    const cli = resolveCli_();
+    // opts.cli is the test seam: the stop path can only be exercised against a
+    // process that is actually running, and the real CLI is neither free nor
+    // deterministic. An array is a command plus leading args, which is how a
+    // stand-in gets run as `node fake-cli.js …` without a .cmd shim — Node
+    // refuses to spawn those on Windows. Nothing in the app sets it; the daemon
+    // always resolves the installed CLI from PATH.
+    const override = Array.isArray(opts.cli) ? opts.cli : (opts.cli ? [opts.cli] : null);
+    const cli = override ? override[0] : resolveCli_();
     if (!cli) {
       emit({ type: 'error', code: 'CLI_NOT_FOUND',
         message: 'Claude Code is not on PATH. Install it, or configure an API key.' });
@@ -379,8 +386,25 @@ function attempt_(prompt, emit, opts, sessionId, resuming) {
     // cwd is a neutral workspace so no CLAUDE.md is discovered by tree walk.
     // opts.env rides on top of ours: the web-gate hook inherits the CLI's
     // environment, which is how the turn token reaches it (verified live).
-    const child = spawn(cli, args, { shell: false, cwd: opts.cwd || process.cwd(),
-      env: { ...process.env, ...(opts.env || {}) } });
+    const child = spawn(cli, override ? [...override.slice(1), ...args] : args,
+      { shell: false, cwd: opts.cwd || process.cwd(),
+        env: { ...process.env, ...(opts.env || {}) } });
+
+    // Stop: the caller keeps a handle so it can end this turn early. `stopped`
+    // is what separates a deliberate kill from a crash, and it has to exist —
+    // killing a resumed turn before its session opens is indistinguishable from
+    // a lost session, and runTurn answers a lost session by starting a second
+    // one. Stop would spawn the process it was asked to end.
+    // The MCP bridge is the CLI's own child and exits when its stdin closes, so
+    // killing the CLI takes the bridge with it.
+    let stopped = false;
+    if (opts.control) {
+      opts.control.stop = () => {
+        if (stopped || child.exitCode !== null) return;
+        stopped = true;
+        child.kill();
+      };
+    }
 
     // The parser owns shape; this function owns the process and the buffering.
     // 'open' is the one event that has to escape the hold — it is the proof the
@@ -398,6 +422,8 @@ function attempt_(prompt, emit, opts, sessionId, resuming) {
     child.stderr.on('data', (d) => { stderr += d.toString(); });
 
     child.on('error', (err) => {
+      if (stopped) return resolve({ ok: false, stopped: true, text: '', costUsd: st.costUsd,
+                                    usage: st.usage, sessionId: st.sessionId || sessionId });
       if (resuming && !st.opened) {
         return resolve({ ok: false, sessionLost: true, sessionId });
       }
@@ -410,6 +436,14 @@ function attempt_(prompt, emit, opts, sessionId, resuming) {
     child.on('close', () => {
       parser.end();
       const liveSessionId = st.sessionId || sessionId;
+
+      // Stopped on purpose. Keep whatever text arrived and the session that
+      // opened — the conversation is still resumable, it just ends here — and
+      // emit nothing: the stream this would write to is already gone.
+      if (stopped) {
+        return resolve({ ok: false, stopped: true, text: st.streamedText || st.finalText || '',
+                         costUsd: st.costUsd, usage: st.usage, sessionId: liveSessionId });
+      }
 
       // Died before the session opened: the stored ID is gone or unreadable.
       // Report that upward so runTurn can start clean, and emit nothing.
@@ -444,7 +478,9 @@ function attempt_(prompt, emit, opts, sessionId, resuming) {
  * @param {string} prompt
  * @param {(ev: {type: string, [k: string]: any}) => void} emit
  * @param {{cwd?: string, model?: string, systemPrompt?: string, sessionId?: string,
- *          resume?: boolean}} opts
+ *          resume?: boolean, control?: {stop?: () => void}}} opts
+ *   `control` is filled in once the process exists: call `control.stop()` to end
+ *   the turn early, and the result comes back `{ok: false, stopped: true}`.
  * @returns {Promise<{ok: boolean, text: string, costUsd: number, usage: object,
  *                    sessionId: string, resumed?: boolean}>}
  */
@@ -453,7 +489,7 @@ async function runTurn(prompt, emit, opts = {}) {
   const resuming = Boolean(opts.resume && stored);
 
   const first = await attempt_(prompt, emit, opts, stored || randomUUID(), resuming);
-  if (!first.sessionLost) return first;
+  if (first.stopped || !first.sessionLost) return first;
 
   // The session was deleted, or never got written. The conversation history is
   // gone either way, and a fresh session beats a dead end the user cannot fix.

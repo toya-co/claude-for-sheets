@@ -75,13 +75,17 @@ function rollup(spreadsheetId) {
 }
 
 function turnLine(a) {
-  const how = a.ok ? (a.resumed ? 'resumed' : 'new session') : 'turn failed';
+  // Three states, not two: a turn the user stopped is neither a success nor a
+  // failure, and colouring it red would say the app broke when it obeyed.
+  const bad = !a.ok && !a.stopped;
+  const how = a.ok ? (a.resumed ? 'resumed' : 'new session')
+            : a.stopped ? 'stopped' : 'turn failed';
   const secs = a.elapsedMs ? ' \\u00b7 ' + (a.elapsedMs / 1000).toFixed(1) + ' s' : '';
-  return '<div class="card row' + (a.ok ? '' : ' fail') + '">' +
-    '<span class="grow"><span class="t"' + (a.ok ? '' : ' style="color:var(--bad)"') + '>' +
+  return '<div class="card row' + (bad ? ' fail' : '') + '">' +
+    '<span class="grow"><span class="t"' + (bad ? ' style="color:var(--bad)"' : '') + '>' +
       esc(a.spreadsheetName) + '</span>' +
     '<span class="m">' + esc(a.summary) + ' \\u00b7 ' + how + secs + '</span></span>' +
-    '<span class="m" style="margin:0">' + (a.ok ? money(a.costUsd) : '\\u2014') + '</span></div>';
+    '<span class="m" style="margin:0">' + (bad ? '\\u2014' : money(a.costUsd)) + '</span></div>';
 }
 
 // ------------------------------------------------------------- dashboard
