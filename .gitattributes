@@ -1,0 +1,20 @@
+# Line endings, decided once.
+#
+# Without this, a Windows checkout converts to CRLF, the bundler writes LF, and
+# `git diff --exit-code addon/dist/Claude.gs` reports the whole file as changed
+# — so CI fails on Windows for a reason that has nothing to do with the code.
+# It is also why committing here warns about LF being replaced on every file,
+# every time.
+#
+# LF in the repository, LF in the working tree, everywhere. Nothing in this
+# project needs CRLF: the .cmd written for the Startup folder is generated at
+# runtime rather than checked in.
+* text=auto eol=lf
+
+# Recorded CLI output. Byte-exact on purpose — these are what the parser is
+# tested against, and a line-ending rewrite is a change to the fixture.
+*.jsonl -text
+
+# Certificates and keys are never committed (see .gitignore), but if one ever
+# arrives it must not be mangled.
+*.pem -text

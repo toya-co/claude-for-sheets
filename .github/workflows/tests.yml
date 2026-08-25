@@ -1,0 +1,59 @@
+# The suite, on every push and pull request.
+#
+# It runs without a browser, a Google account, or a Claude credential: the
+# add-on half runs against a fake SpreadsheetApp, the daemon half against
+# recorded CLI output, and the tests that need a live server spawn the real
+# daemon on a loopback port with its own HOME.
+#
+# That server needs a certificate, which is gitignored — never shared, always
+# generated — so every job makes its own first.
+#
+# Both platforms on purpose. This is developed on Windows and installed by
+# strangers on whatever they have, and the two Windows-specific traps in this
+# codebase (Node refusing to spawn .cmd, MSYS rewriting a leading slash) were
+# both found the hard way rather than by reasoning.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['20', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No `npm ci` anywhere: there is no lockfile because there are no
+      # dependencies. Node standard library only, on both halves.
+      - name: Make the loopback certificate
+        run: npm run certs
+        working-directory: daemon
+
+      - name: Tests
+        run: npm test
+
+      # The committed paste bundle is what people install by hand. If it has
+      # drifted from the sources, that install ships an older add-on than the
+      # repo describes and nothing says so.
+      - name: Paste bundle is up to date
+        run: |
+          npm run bundle
+          git diff --exit-code addon/dist/Claude.gs
+        shell: bash

@@ -7,7 +7,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "certs": "openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 365 -nodes -subj \"//CN=localhost\" -addext \"subjectAltName=DNS:localhost,IP:127.0.0.1\"",
+    "certs": "node scripts/certs.js",
     "test": "node --test"
   },
   "engines": {
