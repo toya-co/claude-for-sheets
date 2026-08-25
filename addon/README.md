@@ -20,7 +20,34 @@ any kind and reaches no network destination except `https://localhost:8443`.
 
 ---
 
-## Install with clasp
+## Install it — two files
+
+**Start here.** No clasp, no Node, nothing to install, five minutes. Nothing
+about the add-on depends on how the code got into the project.
+
+1. **Extensions ▸ Apps Script**
+2. Paste [`dist/Claude.gs`](dist/Claude.gs) over the default `Code.gs`
+3. Add an HTML file named exactly **`Sidebar`** — the `.html` is implied — and
+   paste [`Sidebar.html`](Sidebar.html) into it
+4. **Services ▸ +** and add **Google Sheets API**
+5. Save, reload the spreadsheet tab, **Claude ▸ Open sidebar**, authorize
+
+Step 4 is what the manifest does for you on the clasp route, and it is not
+optional: borders and conditional formatting can be *written* through Apps
+Script but not *read back*, so without the advanced service their undo entries
+have nothing to restore.
+
+`dist/Claude.gs` is generated — `npm run bundle` from the repo root — because
+Apps Script shares one global scope across every file in a project, so four
+files and one file behave identically and one is less to paste.
+
+---
+
+## Install it — with clasp
+
+Worth it only if you intend to track this repo: `git pull && clasp push --force`
+beats re-pasting two files every update. For a one-time install it is strictly
+more setup for the same result.
 
 Five steps, once per spreadsheet. Google's CLI is
 [`@google/clasp`](https://github.com/google/clasp); this was written against
@@ -85,28 +112,6 @@ what it is spent on.
 
 ---
 
-## Install by hand
-
-No clasp, no Node, nothing installed. Two files and a toggle.
-
-1. **Extensions ▸ Apps Script**
-2. Paste [`dist/Claude.gs`](dist/Claude.gs) over the default `Code.gs`
-3. Add an HTML file named exactly **`Sidebar`** — the `.html` is implied — and
-   paste [`Sidebar.html`](Sidebar.html) into it
-4. **Services ▸ +** and add **Google Sheets API**
-5. Save, reload the spreadsheet tab, **Claude ▸ Open sidebar**, authorize
-
-Step 4 is what the manifest does for you on the clasp route, and it is not
-optional: borders and conditional formatting can be *written* through Apps
-Script but not *read back*, so without the advanced service their undo entries
-have nothing to restore.
-
-`dist/Claude.gs` is generated — `npm run bundle` from the repo root — because
-Apps Script shares one global scope across every file in a project, so four
-files and one file behave identically and one is less to paste.
-
----
-
 ## Updating
 
 `git pull`, then `clasp push --force`. Paste installs re-paste both files.
@@ -129,11 +134,13 @@ after a push. Reloading the spreadsheet tab is usually but not always enough.
 The add-on is bound to one file, so a second sheet needs its own install. Two
 ways, and the difference is whether you want the repo to keep pushing to both:
 
-- **Copy the spreadsheet.** The bound script comes with it, already installed.
-  This is what the template sheet is for.
-- **Install again.** Repeat steps 3–5 with the new sheet's Script ID. Swapping
-  the ID in `.clasp.json` retargets the repo, so keep a note of which is which —
-  clasp gives no indication of which spreadsheet you are pushing to.
+- **Install again.** Paste the two files, or repeat the clasp steps with the new
+  sheet's Script ID. Swapping that ID in `.clasp.json` retargets the repo, so
+  keep a note of which is which — clasp gives no indication of which spreadsheet
+  it is pushing to.
+- **Copy a spreadsheet that already has it.** A bound script is supposed to come
+  with the copy, already installed. Untested here — treat it as the convenient
+  case, not the documented route, until it is.
 
 Pairing is separate and per-spreadsheet either way: the first turn in a new
 sheet waits for you to approve it in the local app, however the code got there.

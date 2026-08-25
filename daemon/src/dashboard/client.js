@@ -83,7 +83,7 @@ function turnLine(a) {
   const secs = a.elapsedMs ? ' \\u00b7 ' + (a.elapsedMs / 1000).toFixed(1) + ' s' : '';
   return '<div class="card row' + (bad ? ' fail' : '') + '">' +
     '<span class="grow"><span class="t"' + (bad ? ' style="color:var(--bad)"' : '') + '>' +
-      esc(a.spreadsheetName) + '</span>' +
+      esc(a.spreadsheetName) + '</span> ' +
     '<span class="m">' + esc(a.summary) + ' \\u00b7 ' + how + secs + '</span></span>' +
     '<span class="m" style="margin:0">' + (bad ? '\\u2014' : money(a.costUsd)) + '</span></div>';
 }
@@ -102,7 +102,7 @@ function renderStatus() {
     '<span>' + (cli.available ? 'Claude Code ' + esc(cli.version || '') :
       'install it, or configure an API key') + '</span>' +
     '<span class="sep">\\u00b7</span><span class="m">' + esc(state.origin || '') + '</span>' +
-    '<span class="grow" style="flex:1"></span>' +
+    '<span class="grow" style="flex:1"></span> ' +
     '<span class="m">' + sheets + ' sheet' + (sheets === 1 ? '' : 's') +
       ' \\u00b7 ' + money(totals) + ' total</span>';
 }
@@ -115,7 +115,7 @@ function renderPending() {
   if (!list.length) return;
   $('pending').innerHTML = list.map((p) =>
     '<div class="card pend row">' +
-      '<span class="grow"><span class="t">' + esc(p.spreadsheetName || '(unnamed)') + '</span>' +
+      '<span class="grow"><span class="t">' + esc(p.spreadsheetName || '(unnamed)') + '</span> ' +
       '<span class="m">' + esc(p.spreadsheetId) + ' \\u00b7 asked ' + ago(p.requestedAt) + '</span></span>' +
       '<button class="pri" data-pair="' + esc(p.spreadsheetId) + '" data-allow="1">Allow</button>' +
       '<button data-pair="' + esc(p.spreadsheetId) + '" data-allow="">Deny</button>' +
@@ -152,7 +152,7 @@ function renderSheets() {
       '<div class="row head" data-card="' + esc(p.spreadsheetId) + '" ' +
         'role="button" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '">' +
       '<span class="chev">' + (open ? '▾' : '▸') + '</span>' +
-      '<span class="grow"><span class="t">' + esc(p.name) + '</span>' +
+      '<span class="grow"><span class="t">' + esc(p.name) + '</span> ' +
       '<span class="m">' + meta + '</span></span>' +
       '</div>';
     if (open) {
@@ -261,15 +261,13 @@ function renderSetup() {
       '<span class="d">' + d + '</span></span>' + (extra || '') + '</div>';
 
   $('setupSteps').innerHTML =
-    step(true, 'Local app running', 'You are looking at it \\u2014 it serves this page') +
-    step(true, 'Certificate trusted',
-      'This page loaded over HTTPS, so your browser already accepted it') +
+    step(true, 'Local app running', 'It serves this page') +
+    step(true, 'Certificate trusted', 'This page loaded over HTTPS') +
     step(cli.available, 'Claude Code signed in',
-      cli.available ? esc(cli.version || '') + ' \\u2014 the credential never leaves this machine'
+      cli.available ? esc(cli.version || '')
         : 'Run <code>claude</code> once in a terminal and sign in') +
     step(paired > 0, 'Connect a spreadsheet',
-      paired > 0 ? paired + ' connected' :
-        'Copy the template, or add the add-on to a sheet you already have');
+      paired > 0 ? paired + ' connected' : 'Add the add-on to a spreadsheet');
 }
 
 // ----------------------------------------------------------- diagnostics

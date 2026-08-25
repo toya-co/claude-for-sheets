@@ -55,6 +55,20 @@ claude -p "hi" --output-format stream-json --verbose --model claude-sonnet-5 \
   > resume-missing.jsonl        # exits 1; that is the point
 ```
 
+**Then scrub them, before anything else:**
+
+```
+node scripts/scrub-fixtures.js --write
+```
+
+A real `system/init` line records the machine it ran on — your home directory
+with your account name in it, your auto-memory path, and every slash command,
+skill, agent and plugin you have installed. It is in these files the moment you
+record them, none of it is under test, and this repo is public. The scrubber
+replaces those fields and leaves the shape alone; `fixtures.test.js` fails if a
+recording is committed without it, because the whole point of these
+instructions is that someone will do this again later.
+
 Then update the version line above, and re-read the tests rather than only
 re-running them — a fixture that changed shape may be telling you the parser
 needs to change too, not that the assertion was wrong.

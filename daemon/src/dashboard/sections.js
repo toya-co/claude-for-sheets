@@ -24,23 +24,18 @@ const { TOOLS } = require('../mcp-bridge');
  */
 const GROUPS = [
   { title: 'Reading and writing',
-    blurb: 'The everyday work. It reads before writing when it is not certain what a range holds.',
     names: ['read_range', 'set_values', 'set_formulas', 'clear_range'] },
   { title: 'Formatting',
-    blurb: 'Colours, type, alignment, and borders. None of this destroys content, so none of it asks first.',
     names: ['set_formats', 'set_borders'] },
   { title: 'Shape of the grid',
-    blurb: 'Rows, columns, merging, sorting, and sizing.',
     names: ['insert_rows', 'delete_rows', 'insert_columns', 'delete_columns',
             'merge_cells', 'unmerge_cells', 'sort_range',
             'set_column_width', 'set_row_height', 'freeze_panes',
             'hide_rows', 'show_rows', 'hide_columns', 'show_columns'] },
   { title: 'Tabs',
-    blurb: 'Whole sheets. Deleting one always asks, even when it is empty.',
     names: ['add_sheet', 'delete_sheet', 'rename_sheet', 'duplicate_sheet',
             'hide_sheet', 'show_sheet'] },
   { title: 'Rules and metadata',
-    blurb: 'The things that make a spreadsheet behave rather than just hold numbers.',
     names: ['set_validation', 'set_conditional_format', 'clear_conditional_formats',
             'set_note', 'set_named_range', 'delete_named_range'] },
 ];
@@ -77,7 +72,7 @@ function capabilities() {
              esc(summarize(byName[n].description)) + '</td></tr>';
     }).join('');
     if (!rows) return '';
-    return '<h3>' + esc(g.title) + '</h3><p>' + esc(g.blurb) + '</p>' +
+    return '<h3>' + esc(g.title) + '</h3>' +
            '<div class="scroll"><table><tbody>' + rows + '</tbody></table></div>';
   }).join('');
 
@@ -95,9 +90,7 @@ function capabilities() {
 const canDo = () => `
   <p class="eyebrow">Reference</p>
   <h1>What Claude can do</h1>
-  <p class="lede">${TOOLS.length} tools, listed straight from what Claude is actually
-  given — so this page cannot drift from the real thing. Every change becomes its
-  own undo entry.</p>
+  <p class="lede">${TOOLS.length} tools. Every change is its own undo entry.</p>
 
   ${capabilities()}
 

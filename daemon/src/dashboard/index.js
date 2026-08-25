@@ -78,7 +78,7 @@ function page(dashToken) {
 <section class="page on" id="dashboard">
   <p class="eyebrow">Live</p>
   <h1>Dashboard</h1>
-  <p class="lede">Everything happening right now, in the order it needs attention.</p>
+  <p class="lede">What the app is doing now.</p>
 
   <div class="statusbar" id="statusbar"></div>
 
@@ -98,7 +98,7 @@ function page(dashToken) {
 <section class="page" id="activity">
   <p class="eyebrow">Live</p>
   <h1>Activity</h1>
-  <p class="lede">Every turn this app has served, newest first, across all spreadsheets.</p>
+  <p class="lede">Activity across all spreadsheets.</p>
   <div class="statusbar" id="actSummary"></div>
   <div id="actList"></div>
   <div class="note">
@@ -112,8 +112,7 @@ function page(dashToken) {
 <section class="page" id="setup">
   <p class="eyebrow">Configure &middot; one time</p>
   <h1>Setup</h1>
-  <p class="lede">Two of these are already proven by the fact that you are reading
-  this page. Only what is left needs you.</p>
+  <p class="lede">What the app needs to run.</p>
   <div id="setupSteps"></div>
   ${setupDocs()}
 </section>
@@ -172,8 +171,7 @@ function page(dashToken) {
 <section class="page" id="app">
   <p class="eyebrow">Configure</p>
   <h1>The app itself</h1>
-  <p class="lede">A background process holding the path to your Claude credential should
-  never be something you cannot find or turn off.</p>
+  <p class="lede">Start it, stop it, see where it lives.</p>
 
   <div class="card"><div class="row">
     <span class="grow"><span class="t">Start at login</span>
