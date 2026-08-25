@@ -247,6 +247,15 @@
       button.chip[aria-pressed="true"] {
         color:var(--live); border-color:var(--live); background:var(--live-bg);
       }
+      /* The model picker wears the same chip, so the composer row reads as one
+         strip of controls rather than a select bolted next to a button. */
+      select.chip.pick {
+        font:inherit; font-size:11.5px; padding:3px 4px 3px 8px; max-width:104px;
+        color:var(--fg-dim); cursor:pointer;
+      }
+      select.chip.pick:hover { color:var(--fg); }
+      /* Not paired yet: there is no setting to show, so it takes no space. */
+      select.chip.pick:empty { display:none; }
       button.send.stop::before {
         content:''; display:inline-block; width:8px; height:8px; margin-right:7px;
         background:var(--bad); border-radius:2px; vertical-align:baseline;
@@ -309,9 +318,10 @@
       <div class="composer">
         <textarea id="prompt" rows="1" placeholder="Ask Claude to change this sheet…"></textarea>
         <div class="row">
+          <select class="chip pick" id="modelBar" title="Model — used from the next turn"></select>
           <button class="chip" id="autoWeb" type="button"
                   title="Stop asking before each web search, until this sidebar closes"
-                  aria-pressed="false">Web search: ask</button>
+                  aria-pressed="false">Web: ask</button>
           <span id="hint"></span>
           <span class="spacer"></span>
           <button class="send" id="send">Send</button>
@@ -400,19 +410,11 @@
           '<div class="field"><div class="k">' + esc(k) + '</div>' +
           '<div class="v">' + esc(v) + '</div></div>';
 
-        // The one setting that is editable here. The options come from the
-        // daemon rather than from this file, so adding a model is a daemon
-        // change and never a clasp push.
-        const models = Array.isArray(s.models) && s.models.length
-          ? s.models : [{ id: s.model, label: s.model }];
-        const picker = '<div class="field"><div class="k">Model</div>' +
-          '<select id="modelPick" class="pick">' +
-          models.map((m) => '<option value="' + esc(m.id) + '"' +
-            (m.id === s.model ? ' selected' : '') + '>' + esc(m.label) + '</option>').join('') +
-          '</select><span class="saved" id="modelSaved">Saved</span></div>';
+        const modelLabel = (s.models || []).reduce(
+          (acc, m) => (m.id === s.model ? m.label : acc), s.model || 'default');
 
         box.innerHTML = '<h3>Settings</h3>' +
-          picker +
+          field('Model', modelLabel + '  — change it beside the message box') +
           field('Ask before changes', asks) +
           field('Web search and fetch', s.webAccess === false ? 'Off'
             : autoAllowSearch
@@ -420,30 +422,12 @@
             : 'On, each request approved') +
           '<a class="button" href="' + DAEMON + '/#settings" target="_blank" rel="noopener">' +
           'Change the rest in the local app</a>' +
-          '<div class="note">Model is a preference, so it is editable here. What ' +
-          'Claude asks about, and whether it can reach the web, are protections ' +
+          '<div class="note">Model is a preference, so it is editable beside the ' +
+          'message box. What Claude asks about, and whether it can reach the ' +
+          'web, are protections ' +
           '\u2014 those change in the local app, so that a web page cannot weaken ' +
           'them. Instructions for just this spreadsheet are there too.</div>';
 
-        $('modelPick').onchange = async (e) => {
-          const chosen = e.target.value;
-          e.target.disabled = true;
-          try {
-            const r = await (await fetch(DAEMON + '/prefs', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ spreadsheetId: ctx && ctx.spreadsheetId, model: chosen }),
-            })).json();
-            // Show what is now true, not what was asked for.
-            e.target.value = r.model || chosen;
-            if (!r.error) {
-              const tag = $('modelSaved');
-              tag.classList.add('on');
-              setTimeout(() => tag.classList.remove('on'), 1400);
-            }
-          } catch { /* leaving the panel and reopening shows the real value */ }
-          e.target.disabled = false;
-        };
       }
 
       function addMsg(cls, html) {
@@ -640,12 +624,64 @@
       let autoAllowSearch = false;
       let webAvailable = true;   // until a turn tells us otherwise
 
+      /**
+       * The model picker, in the composer row rather than behind the settings
+       * panel — it is the one setting worth changing mid-conversation (a cheap
+       * model for a totals row, a better one for "find what looks wrong"), and
+       * a control you reach for that often should not be two clicks deep.
+       *
+       * The options come from the daemon, never from this file: a hardcoded
+       * list here would make adding a model a `clasp push` rather than a
+       * restart. Empty until the daemon answers, and CSS hides it while empty —
+       * an unpaired spreadsheet has no settings to show yet.
+       */
+      function renderModels(models, current) {
+        const sel = $('modelBar');
+        if (!Array.isArray(models) || !models.length) { sel.innerHTML = ''; return; }
+        sel.innerHTML = models.map((m) =>
+          '<option value="' + esc(m.id) + '"' + (m.id === current ? ' selected' : '') +
+          '>' + esc(m.label) + '</option>').join('');
+      }
+
+      /** Ask the daemon what the current preferences are, if we can. */
+      async function loadPrefs() {
+        if (!ctx || !ctx.spreadsheetId) return null;
+        try {
+          const res = await fetch(DAEMON + '/prefs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ spreadsheetId: ctx.spreadsheetId }),
+          });
+          if (!res.ok) return null;   // 403 before pairing, 404 on an older build
+          const p = await res.json();
+          renderModels(p.models, p.model);
+          webAvailable = p.webAccess !== false;
+          setAutoWeb(autoAllowSearch);
+          return p;
+        } catch { return null; }
+      }
+
+      async function setModel(id) {
+        const sel = $('modelBar');
+        sel.disabled = true;
+        try {
+          const p = await (await fetch(DAEMON + '/prefs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ spreadsheetId: ctx && ctx.spreadsheetId, model: id }),
+          })).json();
+          // Show what is now true, not what was asked for.
+          if (p.model) sel.value = p.model;
+        } catch { /* the value reverts on the next read */ }
+        sel.disabled = false;
+      }
+
       function setAutoWeb(on) {
         autoAllowSearch = on && webAvailable;
         const b = $('autoWeb');
         b.disabled = !webAvailable;
-        b.textContent = !webAvailable ? 'Web search: off'
-                      : autoAllowSearch ? 'Web search: always' : 'Web search: ask';
+        b.textContent = !webAvailable ? 'Web: off'
+                      : autoAllowSearch ? 'Web: always' : 'Web: ask';
         b.setAttribute('aria-pressed', String(autoAllowSearch));
         b.title = !webAvailable
           ? 'Web access is turned off in the local app, so nothing is searched or fetched'
@@ -993,6 +1029,9 @@
                 askBefore = ev.askBefore || 'destructive';
                 webAvailable = ev.webAccess !== false;
                 setAutoWeb(autoAllowSearch);   // re-reads availability
+                // A sheet paired by *this* turn had no preferences to read when
+                // the sidebar loaded. Now it does, so fill the picker once.
+                if (!$('modelBar').options.length) loadPrefs();
               } else if (ev.type === 'gate') {
                 handleGate(ev, node);
               } else if (ev.type === 'text') {
@@ -1096,6 +1135,7 @@
       $('prompt').addEventListener('input', autoGrow);
 
       $('autoWeb').onclick = () => setAutoWeb(!autoAllowSearch);
+      $('modelBar').onchange = (e) => setModel(e.target.value);
       $('send').onclick = () => (turnAbort ? stopTurn() : send());
       // Enter sends; Shift+Enter makes a newline. Chat convention, and the
       // textarea would otherwise insert a line break before send() ever ran.
@@ -1111,7 +1151,9 @@
       });
 
       checkDaemon();
-      refreshContext();
+      // Context first: /prefs is keyed on the spreadsheet id, so the picker
+      // cannot be filled until we know which sheet this is.
+      refreshContext().then(loadPrefs);
       setInterval(checkDaemon, 10000);
     </script>
   </body>

@@ -229,7 +229,7 @@ const MANUAL = [
    'It answers normally and remembers the conversation. In the local app console, "turn stopped by the sidebar" appears once — no leftover process, no second answer arriving late.'],
 
   ['The model picker changes the model, and only the model',
-   'Sidebar settings: pick a different model, then reopen the panel',
+   'Use the model dropdown beside the message box, then reload the sidebar',
    'The choice sticks and the next turn uses it. "Ask before changes" and "Web search and fetch" stay read-only with a link to the local app — if either becomes editable here, the protection boundary has regressed.'],
 
   ['A page without the token cannot read your activity',

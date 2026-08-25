@@ -337,22 +337,44 @@ test('the sidebar edits the preference and never the protections', () => {
   // /settings requires the dashboard token, which the sidebar does not have and
   // must not get — CORS cannot be an auth boundary, so any page knowing a
   // paired spreadsheet id could otherwise disable the gate (ARCHITECTURE 11.6).
-  const fn = code.slice(code.indexOf('async function loadSettings'));
-  const body = fn.slice(0, fn.indexOf('\n      function addMsg'));
+  //
+  // Scoped to the whole script rather than to one function, on purpose: what
+  // matters is that no code path anywhere writes a protection.
+  assert.ok(!/DAEMON \+ '\/settings'/.test(code),
+    'the sidebar never posts to the token-guarded settings route');
+  assert.ok(!/fetch\(DAEMON \+ '\/status'/.test(code),
+    'and never reads /status, which is the dashboard\'s');
 
-  assert.ok(/'\/prefs'|\/prefs/.test(body), 'it reads through the pair-gated door');
-  assert.ok(!/\/status/.test(body), '/status is the dashboard\'s, and is token-guarded');
-  assert.ok(!/\/settings['"]/.test(body), 'it never posts to the token-guarded settings route');
-
-  // The only key it may send is the model.
-  const writes = body.match(/JSON\.stringify\(\{[^}]*\}/g) || [];
+  const writes = code.match(/JSON\.stringify\(\{[^}]*\}/g) || [];
   for (const w of writes) {
     assert.ok(!/askBefore|webAccess/.test(w),
       'a protection must never be written from the sidebar: ' + w);
   }
   assert.ok(writes.some((w) => /model/.test(w)), 'the model picker does write');
-  assert.ok(/Change the rest in the local app/.test(body),
-    'and the rest still points at the dashboard');
+});
+
+test('the model picker sits in the composer, not behind a panel', () => {
+  // It is the one setting worth changing mid-conversation — a cheap model for a
+  // totals row, a better one for "find what looks wrong" — so it belongs with
+  // the message box. The settings panel shows the value and points here.
+  const row = markup.slice(markup.indexOf('<div class="row">'),
+                           markup.indexOf('</footer>'));
+  assert.ok(/id="modelBar"/.test(row), 'the picker is in the composer row');
+  assert.ok(/id="send"/.test(row), 'beside Send, which is what makes it reachable');
+
+  assert.ok(/function setModel/.test(code), 'and it writes');
+  assert.ok(!/modelPick/.test(code),
+    'exactly one control writes the model, or the two drift');
+  assert.ok(/Change the rest in the local app/.test(code),
+    'the rest still points at the dashboard');
+});
+
+test('the model list is served, never hardcoded in the add-on', () => {
+  // A hardcoded list would make adding a model a clasp push rather than a
+  // daemon restart, and the add-on half is the expensive one to update.
+  assert.ok(!/claude-(sonnet|opus|haiku|fable)/.test(code),
+    'no model id appears in the sidebar source');
+  assert.ok(/renderModels\(p\.models/.test(code), 'the options come from the daemon');
 });
 
 test('the starter chips are wired to something that reads them', () => {
