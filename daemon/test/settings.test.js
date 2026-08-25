@@ -119,7 +119,9 @@ test('the dashboard token is never handed out over a CORS-readable route', () =>
   assert.ok(/dashboard\.page\(DASH_TOKEN\)/.test(body), 'the token rides in the page');
   assert.ok(!/cors\(res\)/.test(body), 'and that route must not be CORS-readable');
 
-  // It must never appear in /status either, which IS readable by any page.
+  // Nor in /status. That route is token-guarded now, so this is belt and
+  // braces rather than the last line of defence — but a route that hands back
+  // the credential for reaching it would make the guard circular.
   const st = src.indexOf("case 'GET /status'");
   const stBody = src.slice(st, src.indexOf('case ', st + 10));
   assert.ok(!/DASH_TOKEN/.test(stBody), '/status must not leak the token');

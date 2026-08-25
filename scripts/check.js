@@ -87,21 +87,36 @@ function environment() {
 
 // -------------------------------------------------------------- automated
 
-function daemonStatus() {
+/** Fetch one path, optionally with the dashboard token. Resolves null on any failure. */
+function get(pathname, token) {
   return new Promise((resolve) => {
     const req = https.request({
-      host: '127.0.0.1', port: PORT, path: '/status', method: 'GET',
+      host: '127.0.0.1', port: PORT, path: pathname, method: 'GET',
+      headers: token ? { 'X-Dashboard-Token': token } : {},
       rejectUnauthorized: false, timeout: 4000,
     }, (res) => {
       let raw = '';
       res.on('data', (d) => { raw += d; });
-      res.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve(null); } });
+      res.on('end', () => resolve(res.statusCode === 200 ? raw : null));
     });
     req.on('error', () => resolve(null));
     req.on('timeout', () => { req.destroy(); resolve(null); });
     req.end();
   });
 }
+
+/**
+ * `/status` is token-guarded, and the token is handed out only by `GET /`, so
+ * the check reads the page first — the same two-step the dashboard itself does.
+ */
+async function daemonStatus() {
+  const page = await get('/');
+  const m = page && /DASH_TOKEN = "([a-f0-9]+)"/.exec(page);
+  if (!m) return null;
+  const raw = await get('/status', m[1]);
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
 
 async function automated() {
   console.log('\n' + bold('Automated') + dim('  — everything that needs no browser'));
@@ -212,6 +227,14 @@ const MANUAL = [
   ['A stopped turn leaves nothing running',
    'After the step above, ask a normal question in the same sheet',
    'It answers normally and remembers the conversation. In the local app console, "turn stopped by the sidebar" appears once — no leftover process, no second answer arriving late.'],
+
+  ['The model picker changes the model, and only the model',
+   'Sidebar settings: pick a different model, then reopen the panel',
+   'The choice sticks and the next turn uses it. "Ask before changes" and "Web search and fetch" stay read-only with a link to the local app — if either becomes editable here, the protection boundary has regressed.'],
+
+  ['A page without the token cannot read your activity',
+   'In any other browser tab, open the console and run: fetch("https://localhost:' + PORT + '/status").then(r => r.status)',
+   '403. If it returns 200, every page you have open can read which spreadsheets you use and what you asked Claude to do with them.'],
 
   ['The dashboard reflects reality',
    'Open https://localhost:' + PORT + '/ and check Activity',

@@ -8,7 +8,7 @@
  *   npm run certs   # once
  *   npm start
  *
- * Routes: /ping, /turn (streaming), /pair, /unpair, /instructions, /reset,
+ * Routes: /ping, /turn (streaming), /prefs, /pair, /unpair, /instructions, /reset,
  * /bridge/call + /op-result (the tool loop), and the dashboard. One Claude Code
  * session is kept per spreadsheet so a turn can refer to the last one.
  */
@@ -417,6 +417,17 @@ const server = https.createServer(loadCerts(), async (req, res) => {
       }
 
       case 'GET /status': {
+        // Token-guarded since M11-prep. This is the dashboard's whole picture —
+        // paired spreadsheet names and ids, recent prompts and what they cost,
+        // every setting — and CORS is `*` and cannot be otherwise, so while it
+        // was open any page you had in another tab could read it. It changes
+        // nothing and reaches no cell contents; it is the index, not the book,
+        // and an index of what you work on and what you asked is still yours.
+        //
+        // The sidebar does NOT use this route. It has `POST /prefs`, which
+        // returns three display values and is gated on the spreadsheet already
+        // being paired — so nothing here has to be readable by a web page.
+        if (!fromDashboard(req, null)) return json(res, 403, { error: 'not the dashboard' });
         const cli = await claude.checkCli();
         return json(res, 200, {
           version: VERSION,
@@ -433,6 +444,47 @@ const server = https.createServer(loadCerts(), async (req, res) => {
           // deleted in Task Scheduler, and a cached preference would go on
           // claiming autostart is on long after it stopped being true.
           autostart: await autostart.status(),
+        });
+      }
+
+      /**
+       * The sidebar's own door: read the three values it displays, and set the
+       * one it is allowed to set.
+       *
+       * Gated on the spreadsheet already being paired — the same guard `/turn`
+       * uses, and a strictly stronger precondition than what it protects: if a
+       * caller can satisfy it, it can already run a turn, which is a far larger
+       * capability than reading a model name. No new secret, and nothing here
+       * that a page could use to weaken a protection.
+       *
+       * Model only, deliberately. `askBefore` and `webAccess` are protections
+       * rather than preferences (ARCHITECTURE.md §11.6) and stay behind the
+       * dashboard token: a page that could turn the confirmation gate off is
+       * the whole reason the sidebar has no token. They are returned here for
+       * display and ignored on the way in.
+       *
+       * POST for the read too, because the spreadsheet id is the argument and
+       * ids do not belong in a URL.
+       */
+      case 'POST /prefs': {
+        const body = await readBody(req);
+        if (!store.isPaired(body.spreadsheetId)) {
+          return json(res, 403, { error: 'not a paired spreadsheet' });
+        }
+        if (body.model !== undefined) {
+          const before = store.getSettings().model;
+          const after = store.setSettings({ model: body.model }).model;
+          if (after !== body.model) {
+            return json(res, 400, { error: 'unknown model', model: before, models: store.MODELS });
+          }
+          console.log(`model set from the sidebar: ${after}`);
+        }
+        const s = store.getSettings();
+        return json(res, 200, {
+          model: s.model,
+          askBefore: s.askBefore,
+          webAccess: s.webAccess !== false,
+          models: store.MODELS,
         });
       }
 

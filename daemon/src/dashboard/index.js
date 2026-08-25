@@ -22,6 +22,7 @@
 const { CSS } = require('./style');
 const { CLIENT } = require('./client');
 const { canDo, undoDocs, webDocs, howDocs, setupDocs } = require('./sections');
+const { MODELS } = require('../store');
 
 const VERSION = require('../../package.json').version;
 
@@ -128,10 +129,7 @@ function page(dashToken) {
     <span class="m">Every turn carries a fixed overhead, so the model dominates cost
     more than message length does</span></span>
     <select id="model">
-      <option value="claude-sonnet-5">Sonnet 5</option>
-      <option value="claude-opus-5">Opus 5</option>
-      <option value="claude-fable-5">Fable 5</option>
-      <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+      ${MODELS.map((m) => `<option value="${m.id}">${m.label}</option>`).join('')}
     </select>
     <span class="saved" id="savedModel">Saved</span>
   </div></div>

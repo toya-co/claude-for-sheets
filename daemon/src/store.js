@@ -60,6 +60,26 @@ const DEFAULTS = {
 const ASK_LEVELS = ['destructive', 'unrecoverable'];
 
 /**
+ * The models on offer, in the order they are offered.
+ *
+ * One list, served to both front ends rather than written into either. The
+ * dashboard used to carry its own `<option>`s, and the sidebar picker would
+ * have made that two hardcoded lists to keep in step — with the sidebar's half
+ * living in Apps Script, where updating it means a `clasp push` rather than a
+ * restart. Adding a model is now a change to this array and nothing else.
+ *
+ * It is also the allowlist: `setSettings` refuses a model that is not here, so
+ * a bad value cannot be written by anything, and every turn spawns with a model
+ * the CLI will accept.
+ */
+const MODELS = [
+  { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+  { id: 'claude-opus-5', label: 'Opus 5' },
+  { id: 'claude-fable-5', label: 'Fable 5' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+];
+
+/**
  * Read-through, deliberately uncached.
  *
  * An in-memory cache plus whole-file writes means any second process — or a
@@ -194,7 +214,10 @@ function getSettings() {
 function setSettings(patch) {
   return update((s) => {
     const p = patch || {};
-    if (typeof p.model === 'string' && p.model.trim()) {
+    // Allowlisted, not merely non-empty. A model string reaches the CLI as an
+    // argument and a wrong one fails every turn until someone notices — and now
+    // that the sidebar can set this, "whatever was posted" is not good enough.
+    if (typeof p.model === 'string' && MODELS.some((m) => m.id === p.model.trim())) {
       s.settings.model = p.model.trim();
     }
     if (p.webAccess !== undefined) {
@@ -227,7 +250,7 @@ function setSheetInstructions(spreadsheetId, text) {
 }
 
 module.exports = {
-  DIR, FILE, ASK_LEVELS,
+  DIR, FILE, ASK_LEVELS, MODELS,
   isPaired, pair, unpair, listPaired,
   recordActivity, listActivity,
   getInstructions, setGlobalInstructions, setSheetInstructions,

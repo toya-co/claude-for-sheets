@@ -280,9 +280,17 @@ test('every element the script drives exists in the markup', () => {
   const re = /\$\('([A-Za-z0-9_-]+)'\)/g;
   while ((m = re.exec(code)) !== null) ids.add(m[1]);
 
-  const missing = [...ids].filter((id) => !markup.includes('id="' + id + '"')).sort();
+  // Not every element is in the static markup: the settings panel builds its
+  // model picker at render time, so an id can be minted by the script itself.
+  // Both are looked for the same way — the failure this catches is a rename in
+  // one place and not the other, whichever place that is.
+  const emitted = new Set();
+  const idRe = /id="([A-Za-z0-9_-]+)"/g;
+  while ((m = idRe.exec(html)) !== null) emitted.add(m[1]);
+
+  const missing = [...ids].filter((id) => !emitted.has(id)).sort();
   assert.deepStrictEqual(missing, [],
-    'referenced but not in the markup: ' + missing.join(', '));
+    'referenced but never given to any element: ' + missing.join(', '));
 });
 
 test('exactly one function decides which panel is visible', () => {
@@ -324,15 +332,27 @@ test('the icon controls are reachable without a mouse', () => {
   assert.ok(/title="/.test(markup), 'and they have accessible names');
 });
 
-test('settings are shown but not changed from here', () => {
-  // POST /settings requires the dashboard token, which the sidebar does not
-  // have and should not get: CORS cannot be an auth boundary, so any page
-  // knowing a paired spreadsheet id could otherwise disable the gate.
+test('the sidebar edits the preference and never the protections', () => {
+  // Model is a preference. askBefore and webAccess are protections: POST
+  // /settings requires the dashboard token, which the sidebar does not have and
+  // must not get — CORS cannot be an auth boundary, so any page knowing a
+  // paired spreadsheet id could otherwise disable the gate (ARCHITECTURE 11.6).
   const fn = code.slice(code.indexOf('async function loadSettings'));
-  const body = fn.slice(0, fn.indexOf('\n      $('));
-  assert.ok(!/method: 'POST'/.test(body), 'the settings view never writes');
-  assert.ok(/\/status/.test(body), 'it reads the live values');
-  assert.ok(/Change in the local app/.test(body), 'and sends you where they can change');
+  const body = fn.slice(0, fn.indexOf('\n      function addMsg'));
+
+  assert.ok(/'\/prefs'|\/prefs/.test(body), 'it reads through the pair-gated door');
+  assert.ok(!/\/status/.test(body), '/status is the dashboard\'s, and is token-guarded');
+  assert.ok(!/\/settings['"]/.test(body), 'it never posts to the token-guarded settings route');
+
+  // The only key it may send is the model.
+  const writes = body.match(/JSON\.stringify\(\{[^}]*\}/g) || [];
+  for (const w of writes) {
+    assert.ok(!/askBefore|webAccess/.test(w),
+      'a protection must never be written from the sidebar: ' + w);
+  }
+  assert.ok(writes.some((w) => /model/.test(w)), 'the model picker does write');
+  assert.ok(/Change the rest in the local app/.test(body),
+    'and the rest still points at the dashboard');
 });
 
 test('the starter chips are wired to something that reads them', () => {

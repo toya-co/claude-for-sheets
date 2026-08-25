@@ -21,7 +21,7 @@ Nothing is hosted. No Google tokens are stored anywhere, by anyone.
 
 ## Status
 
-**M5.5 — web access, gated. M8.5 — near-parity sheet coverage.**
+**M10.6 — everything below release engineering. Near-parity sheet coverage, gated web access, and the local app as the front door.**
 Claude reads ranges when it needs to, then edits values, formulas, and formats (fonts,
 sizes, wrap, alignment); merges, sorts, resizes, freezes, hides, and renames;
 and restructures rows, columns, and tabs — seeing each result and continuing,
@@ -49,7 +49,12 @@ improvise.
 | M8.5 capability parity tier 1 | ✅ merge, sort, resize, freeze, hide, rename — all undoable |
 | M5.5 web search and fetch, behind the gate | ✅ every request is an Allow/Skip card; local addresses auto-refused |
 | Tier 2: borders, dropdowns, conditional formats, notes, named ranges | ✅ all undoable, borders via the Sheets API |
-| M10 dashboard | next |
+| M10 dashboard | ✅ setup, activity, settings, reference, diagnostics — capability list generated from the tools |
+| M10.5 regression suite | ✅ `npm run check`: automated pass, then a manual one with expected output per step |
+| M10.6 start at login | ✅ verified across a real reboot |
+| Stop, and standing permission for web search | ✅ Stop ends a turn mid-flight; search can be allowed for the session |
+| Model picker in the sidebar | ✅ the preference is editable there; the protections stay in the local app |
+| M11 release engineering | next — install docs, template sheet, CI, release tag |
 
 Full plan in [`ARCHITECTURE.md`](ARCHITECTURE.md). The platform verification
 behind it is in [`PLAN.md`](PLAN.md).
@@ -131,6 +136,14 @@ answers anything still outstanding, so nothing arrives late and nothing is left
 running. Work already written to the sheet stays written — Stop ends the turn,
 it does not reverse it — and each edit is still its own history entry. The
 conversation survives, so you can correct yourself and carry on.
+
+**One setting is editable from the sidebar, and it is the harmless one.** The
+model picker is there, because a wrong model costs money or quality and you see
+it on the next turn. What Claude asks before changing, and whether it can reach
+the web, are not there: those are protections, and a page that could switch one
+off would have taken something away silently. They change in the local app,
+which no web page can reach. The route the sidebar uses accepts a model and
+ignores everything else it is sent.
 
 **History lives in your spreadsheet.** Snapshots go to a hidden
 `__claude_history__` sheet, so they never leave the file, travel with it when

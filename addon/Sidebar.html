@@ -167,6 +167,19 @@
       }
       .panel .field .k { font-size:12.5px; font-weight:600; }
       .panel .field .v { font-size:12.5px; color:var(--fg-dim); margin-top:2px; }
+      /* The one editable field. Full width because at 300px a select beside a
+         label wraps to a two-character box. */
+      .panel .field select.pick {
+        font:inherit; font-size:12.5px; width:100%; margin-top:5px;
+        padding:5px 7px; border-radius:6px; border:1px solid var(--rule);
+        background:var(--paper); color:var(--fg);
+      }
+      .panel .field select.pick:disabled { opacity:.5; }
+      .panel .field .saved {
+        font-size:11.5px; color:var(--live); margin-top:4px;
+        display:block; opacity:0; transition:opacity .15s;
+      }
+      .panel .field .saved.on { opacity:1; }
       .panel .note { font-size:12px; color:var(--fg-faint); line-height:1.5;
                      margin:11px 0 0; }
       .panel a.button, .panel button.wide {
@@ -357,7 +370,15 @@
         box.innerHTML = '<h3>Settings</h3><div class="note">reading…</div>';
         let s;
         try {
-          s = (await (await fetch(DAEMON + '/status')).json()).settings || {};
+          // /prefs, not /status: three display values plus the model list, gated
+          // on this spreadsheet already being paired. /status is the dashboard's
+          // whole picture and is token-guarded, which the sidebar cannot hold.
+          s = await (await fetch(DAEMON + '/prefs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ spreadsheetId: ctx && ctx.spreadsheetId }),
+          })).json();
+          if (s.error) throw new Error(s.error);
         } catch {
           box.innerHTML = '<h3>Settings</h3>' +
             '<div class="note">The local app is not answering, so its settings ' +
@@ -371,18 +392,50 @@
           '<div class="field"><div class="k">' + esc(k) + '</div>' +
           '<div class="v">' + esc(v) + '</div></div>';
 
+        // The one setting that is editable here. The options come from the
+        // daemon rather than from this file, so adding a model is a daemon
+        // change and never a clasp push.
+        const models = Array.isArray(s.models) && s.models.length
+          ? s.models : [{ id: s.model, label: s.model }];
+        const picker = '<div class="field"><div class="k">Model</div>' +
+          '<select id="modelPick" class="pick">' +
+          models.map((m) => '<option value="' + esc(m.id) + '"' +
+            (m.id === s.model ? ' selected' : '') + '>' + esc(m.label) + '</option>').join('') +
+          '</select><span class="saved" id="modelSaved">Saved</span></div>';
+
         box.innerHTML = '<h3>Settings</h3>' +
-          field('Model', s.model || 'default') +
+          picker +
           field('Ask before changes', asks) +
           field('Web search and fetch', s.webAccess === false ? 'Off'
             : autoAllowSearch
             ? 'On — searches allowed for this sidebar, fetches approved each time'
             : 'On, each request approved') +
           '<a class="button" href="' + DAEMON + '/#settings" target="_blank" rel="noopener">' +
-          'Change in the local app</a>' +
-          '<div class="note">Settings live in the local app because the gate they ' +
-          'control is a safety boundary \u2014 a web page must not be able to reach ' +
-          'it. Instructions for just this spreadsheet are there too.</div>';
+          'Change the rest in the local app</a>' +
+          '<div class="note">Model is a preference, so it is editable here. What ' +
+          'Claude asks about, and whether it can reach the web, are protections ' +
+          '\u2014 those change in the local app, so that a web page cannot weaken ' +
+          'them. Instructions for just this spreadsheet are there too.</div>';
+
+        $('modelPick').onchange = async (e) => {
+          const chosen = e.target.value;
+          e.target.disabled = true;
+          try {
+            const r = await (await fetch(DAEMON + '/prefs', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ spreadsheetId: ctx && ctx.spreadsheetId, model: chosen }),
+            })).json();
+            // Show what is now true, not what was asked for.
+            e.target.value = r.model || chosen;
+            if (!r.error) {
+              const tag = $('modelSaved');
+              tag.classList.add('on');
+              setTimeout(() => tag.classList.remove('on'), 1400);
+            }
+          } catch { /* leaving the panel and reopening shows the real value */ }
+          e.target.disabled = false;
+        };
       }
 
       function addMsg(cls, html) {

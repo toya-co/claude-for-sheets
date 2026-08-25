@@ -316,7 +316,8 @@ function trouble(headline, detail) {
 async function refresh() {
   let next;
   try {
-    const r = await fetch('/status', { cache: 'no-store' });
+    const r = await fetch('/status', { cache: 'no-store',
+      headers: { 'X-Dashboard-Token': DASH_TOKEN } });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     next = await r.json();
   } catch (e) {
@@ -384,7 +385,20 @@ document.addEventListener('click', async (e) => {
     flash('savedGlobal');
     return refresh();
   }
-  if (b.id === 'rawStatus') { window.open('/status', '_blank'); return; }
+  if (b.id === 'rawStatus') {
+    // Fetched and written into the new window rather than opened as a URL: the
+    // token rides in a header, and a new tab navigating to /status carries no
+    // headers. Putting it in the query string instead would write the token
+    // into history and the address bar, which is worse than the problem.
+    const r = await fetch('/status', { cache: 'no-store',
+      headers: { 'X-Dashboard-Token': DASH_TOKEN } });
+    const text = JSON.stringify(await r.json(), null, 2);
+    const w = window.open('', '_blank');
+    w.document.write('<pre></pre>');
+    w.document.querySelector('pre').textContent = text;
+    w.document.close();
+    return;
+  }
 
   if (b.id === 'quitApp') {
     if (!confirm('Quit the local app? Sidebars will show "local app not running" until it starts again.')) return;

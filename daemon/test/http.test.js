@@ -124,8 +124,16 @@ test('/ping answers without touching any state', async () => {
   assert.strictEqual(typeof r.json.credentialReady, 'boolean');
 });
 
-test('/status carries everything the dashboard renders from', async () => {
+test('/status refuses a page that has not got the token', async () => {
+  // It is the dashboard's whole picture: paired sheet names and ids, recent
+  // prompts and their cost, every setting. CORS is `*` and cannot be otherwise,
+  // so while this was open any page in any tab could read it.
   const r = await req('GET', '/status');
+  assert.strictEqual(r.status, 403);
+});
+
+test('/status carries everything the dashboard renders from', async () => {
+  const r = await req('GET', '/status', undefined, { 'X-Dashboard-Token': await dashToken() });
   assert.strictEqual(r.status, 200);
   for (const key of ['version', 'origin', 'cli', 'pending', 'paired', 'activity',
                      'settings', 'autostart']) {
@@ -272,7 +280,119 @@ test('the pairing lifecycle runs: hold, decide, release', async () => {
 });
 
 test('a denied spreadsheet is not left paired', async () => {
-  const r = await req('GET', '/status');
+  const r = await req('GET', '/status', undefined, { 'X-Dashboard-Token': await dashToken() });
   assert.ok(!r.json.paired.some((p) => p.spreadsheetId === 'http-test-sheet'),
     'denying must not store the pairing');
+});
+
+// ------------------------------------------------------------------- /prefs
+
+/**
+ * Pair a spreadsheet for real, through the only path that stores one: a turn
+ * asks, a human approves.
+ *
+ * The approval is what writes the pairing, and it happens before the turn goes
+ * on to invoke Claude — so the stream is dropped the moment `paired` arrives.
+ * That leaves the pairing stored without ever spawning the CLI, which is
+ * neither free nor deterministic. It also leans on the daemon killing a turn
+ * whose reader hung up; if that regresses, this hangs rather than lying.
+ */
+function pairSheet(spreadsheetId) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({ spreadsheetId, spreadsheetName: 'Prefs Test', prompt: 'hi' });
+    const r = https.request({
+      ...BASE, path: '/turn', method: 'POST',
+      headers: { 'Content-Type': 'application/json',
+                 'Content-Length': Buffer.byteLength(data) },
+    }, (res) => {
+      let buf = '';
+      res.on('data', async (d) => {
+        buf += d;
+        if (/pairing_required/.test(buf)) {
+          buf = '';
+          await req('POST', '/pair', { spreadsheetId, allow: true },
+            { 'X-Dashboard-Token': await dashToken() });
+        }
+        if (/"type":"paired"/.test(buf) || /"type":"settings"/.test(buf)) {
+          r.destroy();
+          resolve();
+        }
+      });
+      res.on('end', resolve);
+    });
+    r.on('error', (e) => (/socket hang up|aborted|ECONNRESET/i.test(e.message) ? resolve() : reject(e)));
+    r.write(data);
+    r.end();
+  });
+}
+
+/**
+ * The sidebar's own door. It exists because the sidebar cannot hold the
+ * dashboard token — it is a web page, and a page that could hold the token
+ * could turn the confirmation gate off. So this route is gated on the
+ * spreadsheet already being paired, and carries only what the sidebar displays
+ * plus the one value it may set.
+ */
+test('/prefs refuses a spreadsheet that was never paired', async () => {
+  const r = await req('POST', '/prefs', { spreadsheetId: 'never-paired-sheet' });
+  assert.strictEqual(r.status, 403);
+});
+
+test('/prefs refuses a missing spreadsheet id outright', async () => {
+  const r = await req('POST', '/prefs', {});
+  assert.strictEqual(r.status, 403);
+});
+
+test('a paired sheet reads its preferences and the model list', async () => {
+  await pairSheet('prefs-sheet');
+
+  const r = await req('POST', '/prefs', { spreadsheetId: 'prefs-sheet' });
+  assert.strictEqual(r.status, 200);
+  assert.ok(r.json.model, 'the current model comes back');
+  assert.ok(Array.isArray(r.json.models) && r.json.models.length,
+    'and the list to choose from, so the sidebar hardcodes nothing');
+  assert.ok('askBefore' in r.json && 'webAccess' in r.json, 'the display values come back');
+});
+
+test('/prefs sets the model, and reports what is now true', async () => {
+  await pairSheet('prefs-sheet');
+
+  const list = (await req('POST', '/prefs', { spreadsheetId: 'prefs-sheet' })).json.models;
+  const target = list[list.length - 1].id;
+
+  const w = await req('POST', '/prefs', { spreadsheetId: 'prefs-sheet', model: target });
+  assert.strictEqual(w.status, 200);
+  assert.strictEqual(w.json.model, target);
+
+  const again = await req('POST', '/prefs', { spreadsheetId: 'prefs-sheet' });
+  assert.strictEqual(again.json.model, target, 'and it persisted');
+});
+
+test('/prefs refuses a model that is not on the list', async () => {
+  await pairSheet('prefs-sheet');
+  const before = (await req('POST', '/prefs', { spreadsheetId: 'prefs-sheet' })).json.model;
+
+  const r = await req('POST', '/prefs',
+    { spreadsheetId: 'prefs-sheet', model: 'claude-not-a-real-model' });
+  assert.strictEqual(r.status, 400);
+
+  const after = (await req('POST', '/prefs', { spreadsheetId: 'prefs-sheet' })).json.model;
+  assert.strictEqual(after, before, 'a rejected model changes nothing');
+});
+
+test('/prefs cannot touch a protection, whatever it is sent', async () => {
+  // The whole point of the route. askBefore and webAccess stay behind the
+  // dashboard token; sending them here must be ignored, not honoured.
+  await pairSheet('prefs-sheet');
+
+  const before = (await req('POST', '/prefs', { spreadsheetId: 'prefs-sheet' })).json;
+  await req('POST', '/prefs', {
+    spreadsheetId: 'prefs-sheet',
+    askBefore: 'unrecoverable',
+    webAccess: false,
+  });
+  const after = (await req('POST', '/prefs', { spreadsheetId: 'prefs-sheet' })).json;
+
+  assert.strictEqual(after.askBefore, before.askBefore, 'the gate level is untouched');
+  assert.strictEqual(after.webAccess, before.webAccess, 'web access is untouched');
 });
