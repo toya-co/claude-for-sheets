@@ -214,43 +214,32 @@ const howDocs = () => `
 
 const setupDocs = () => `
   <h2>Installing the app itself</h2>
-  <p>You are reading this from a running copy, so this section is for the next
-  machine, a colleague, or an update &mdash; not for right now.</p>
+  <p>For the next machine, a colleague, or an update.</p>
 
   <h3>What it needs first</h3>
   <p><strong>Node 18 or newer</strong>, and <strong>Claude Code signed in</strong>.
-  Neither is bundled. Run <code>claude</code> once in a terminal and sign in; the
-  credential stays in Claude Code and this app never sees it.</p>
+  Run <code>claude</code> once in a terminal and sign in. The credential stays in
+  Claude Code; this app never sees it.</p>
 
   <h3>Then</h3>
   <p><code>git clone</code> the repository, and from the <code>daemon</code> folder:</p>
   <p><code>npm run certs</code> &mdash; once, to make the local certificate<br>
   <code>npm start</code> &mdash; every time, or let Start at login do it</p>
-  <p>There are no dependencies to install. Open
-  <code>https://localhost:8443/</code> and accept the certificate warning once
-  per browser &mdash; it is a self-signed certificate for your own machine, and
-  your browser has no way to know that.</p>
+  <p>No dependencies to install. Open <code>https://localhost:8443/</code> and
+  accept the certificate warning once per browser &mdash; it is self-signed, for
+  this machine, and a browser cannot tell the difference.</p>
 
   <h3>Updating</h3>
-  <p><code>git pull</code>, then stop and start the app. If Start at login is on
-  and you moved the folder, turn it off and on again to repoint it.</p>
+  <p><code>git pull</code>, then stop and start the app. Moved the folder? Turn
+  Start at login off and on to repoint it.</p>
 
-  <h2>Adding a spreadsheet you already have</h2>
-  <p>The add-on is a container-bound script: it lives inside one spreadsheet rather
-  than in your account. A new sheet made from the template needs nothing. An existing
-  sheet needs the add-on added once.</p>
-
-  <h3>With clasp &mdash; one command, after three of setup</h3>
-  <p>From a clone of the repo: <code>cd addon &amp;&amp; clasp push</code>, once
-  clasp is signed in and pointed at this spreadsheet's script. The full
-  walkthrough is <code>addon/README.md</code> in the repo &mdash; including the
-  account-level <strong>Apps Script API</strong> switch that is off by default
-  and makes every first push fail with an error that sounds like something
-  else.</p>
+  <h2>Adding a spreadsheet</h2>
+  <p>The add-on is container-bound: it lives inside one spreadsheet, so each
+  spreadsheet needs it added once.</p>
 
   <h3>By hand &mdash; two files and a toggle</h3>
-  <p>Apps Script shares one scope across every script file, so the whole add-on
-  ships as a single generated file.</p>
+  <p>Apps Script shares one scope across every file, so the add-on ships as a
+  single generated file.</p>
   <ol>
     <li><strong>Extensions &#9656; Apps Script</strong></li>
     <li>Paste <code>addon/dist/Claude.gs</code> over the default
@@ -258,19 +247,26 @@ const setupDocs = () => `
     <li>Add an HTML file named exactly <code>Sidebar</code> and paste
       <code>addon/Sidebar.html</code> into it</li>
     <li><strong>Services</strong> &#9656; add <strong>Google Sheets API</strong>
-      &mdash; needed for borders and conditional formatting, which Apps Script
-      can write but not read back</li>
+      &mdash; borders and conditional formatting can be written without it but
+      not read back, so their undo would have nothing to restore</li>
     <li>Save, reload the spreadsheet tab, then <strong>Claude &#9656; Open
       sidebar</strong> and authorize</li>
   </ol>
-  <p>The HTML file has to stay separate because the sidebar is loaded by name.
+  <p>The HTML stays a separate file because the sidebar is loaded by name.
   <code>Diagnostic.html</code> is a development tool and is not needed.</p>
+
+  <h3>With clasp</h3>
+  <p><code>cd addon &amp;&amp; clasp push</code>, once clasp is signed in and
+  pointed at this spreadsheet's script. Worth the setup only to track the repo.
+  Full walkthrough in <code>addon/README.md</code> &mdash; including the
+  account-level <strong>Apps Script API</strong> switch that is off by default
+  and makes every first push fail.</p>
 
   <div class="note">
     <strong>Why there is no install-once-everywhere.</strong> Google only lets code
     touch a spreadsheet if that code lives inside it. Skipping the Marketplace is what
     buys no app review, no verification wait, no unverified-app warning screen and no
-    user cap — the per-sheet step is what that costs.
+    user cap &mdash; the per-sheet step is what that costs.
   </div>
 `;
 

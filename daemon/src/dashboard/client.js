@@ -83,7 +83,7 @@ function turnLine(a) {
   const secs = a.elapsedMs ? ' \\u00b7 ' + (a.elapsedMs / 1000).toFixed(1) + ' s' : '';
   return '<div class="card row' + (bad ? ' fail' : '') + '">' +
     '<span class="grow"><span class="t"' + (bad ? ' style="color:var(--bad)"' : '') + '>' +
-      esc(a.spreadsheetName) + '</span> ' +
+      esc(a.spreadsheetName) + '</span>' +
     '<span class="m">' + esc(a.summary) + ' \\u00b7 ' + how + secs + '</span></span>' +
     '<span class="m" style="margin:0">' + (bad ? '\\u2014' : money(a.costUsd)) + '</span></div>';
 }
@@ -102,7 +102,7 @@ function renderStatus() {
     '<span>' + (cli.available ? 'Claude Code ' + esc(cli.version || '') :
       'install it, or configure an API key') + '</span>' +
     '<span class="sep">\\u00b7</span><span class="m">' + esc(state.origin || '') + '</span>' +
-    '<span class="grow" style="flex:1"></span> ' +
+    '<span class="grow" style="flex:1"></span>' +
     '<span class="m">' + sheets + ' sheet' + (sheets === 1 ? '' : 's') +
       ' \\u00b7 ' + money(totals) + ' total</span>';
 }
@@ -115,7 +115,7 @@ function renderPending() {
   if (!list.length) return;
   $('pending').innerHTML = list.map((p) =>
     '<div class="card pend row">' +
-      '<span class="grow"><span class="t">' + esc(p.spreadsheetName || '(unnamed)') + '</span> ' +
+      '<span class="grow"><span class="t">' + esc(p.spreadsheetName || '(unnamed)') + '</span>' +
       '<span class="m">' + esc(p.spreadsheetId) + ' \\u00b7 asked ' + ago(p.requestedAt) + '</span></span>' +
       '<button class="pri" data-pair="' + esc(p.spreadsheetId) + '" data-allow="1">Allow</button>' +
       '<button data-pair="' + esc(p.spreadsheetId) + '" data-allow="">Deny</button>' +
@@ -152,7 +152,7 @@ function renderSheets() {
       '<div class="row head" data-card="' + esc(p.spreadsheetId) + '" ' +
         'role="button" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '">' +
       '<span class="chev">' + (open ? '▾' : '▸') + '</span>' +
-      '<span class="grow"><span class="t">' + esc(p.name) + '</span> ' +
+      '<span class="grow"><span class="t">' + esc(p.name) + '</span>' +
       '<span class="m">' + meta + '</span></span>' +
       '</div>';
     if (open) {

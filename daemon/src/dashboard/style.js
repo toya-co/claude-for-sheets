@@ -99,6 +99,11 @@ a{color:var(--live)}
 .card.pend{border-color:var(--warn);background:var(--warn-bg)}
 .card.fail{border-color:var(--bad)}
 .card .t{font-weight:600}
+/* The gap between a title and the grey meta that follows it, in one place.
+   These rows are built by string concatenation, which — unlike the pages
+   written as HTML — has no newline between the two spans to render as a
+   space, so they ran together: "Budgetpaired Aug 19". */
+.card .t+.m{margin-left:10px}
 .card .head{cursor:pointer;border-radius:4px;margin:-4px;padding:4px}
 .card .head:hover{background:var(--surface-2)}
 .card .head:focus-visible{outline:2px solid var(--live);outline-offset:-1px}
