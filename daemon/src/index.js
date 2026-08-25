@@ -608,6 +608,11 @@ server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`Port ${PORT} is already in use — the local app is probably already running.`);
     console.error(`Open https://localhost:${PORT}/ , or stop the other instance first.`);
+    // The common case after a git pull, and the confusing one: start-at-login
+    // already launched the OLD build, so this refuses to start, the sidebar
+    // still shows a green dot, and the new routes 404 as if they were broken.
+    console.error('Updating? The running copy is the previous build. Quit it from the');
+    console.error('dashboard (Diagnostics → Quit), then start this one.');
     process.exit(1);
   }
   throw err;

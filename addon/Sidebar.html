@@ -357,33 +357,41 @@
       function syncEmptyState() { showView(view); }
 
       /**
-       * Settings are shown here and changed in the local app.
+       * The model is changed here; the protections are changed in the local app.
        *
        * Deliberate: POST /settings requires the dashboard token, which the
        * sidebar does not have and should not get. CORS cannot be an auth
        * boundary here, so any page that knew a paired spreadsheet id could
-       * otherwise turn OFF the confirmation gate. Reading is already open,
-       * so showing the values costs nothing.
+       * otherwise turn OFF the confirmation gate. `POST /prefs` is the door it
+       * does have — pair-gated, and it accepts nothing but a model.
        */
       async function loadSettings() {
         const box = $('settings');
+        const fail = (msg) => { box.innerHTML = '<h3>Settings</h3><div class="note">' + msg + '</div>'; };
         box.innerHTML = '<h3>Settings</h3><div class="note">reading…</div>';
         let s;
         try {
           // /prefs, not /status: three display values plus the model list, gated
           // on this spreadsheet already being paired. /status is the dashboard's
           // whole picture and is token-guarded, which the sidebar cannot hold.
-          s = await (await fetch(DAEMON + '/prefs', {
+          const res = await fetch(DAEMON + '/prefs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ spreadsheetId: ctx && ctx.spreadsheetId }),
-          })).json();
+          });
+          // A 404 means the local app is running, answering, and older than this
+          // add-on — the route simply is not there yet. Worth its own message:
+          // the status dot is green (it only proves /ping), so "not answering"
+          // would send you looking for a stopped app that is plainly running.
+          if (res.status === 404) {
+            return fail('The local app is running an older build than this sidebar, ' +
+              'so it has no settings to show yet. Quit it from ' +
+              '<span class="a1">' + DAEMON + '</span> and start it again.');
+          }
+          s = await res.json();
           if (s.error) throw new Error(s.error);
         } catch {
-          box.innerHTML = '<h3>Settings</h3>' +
-            '<div class="note">The local app is not answering, so its settings ' +
-            'cannot be read.</div>';
-          return;
+          return fail('The local app is not answering, so its settings cannot be read.');
         }
         const asks = s.askBefore === 'unrecoverable'
           ? 'Only changes that cannot be undone'

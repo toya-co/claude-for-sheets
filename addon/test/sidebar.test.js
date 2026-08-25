@@ -404,3 +404,17 @@ test('no colour is hardcoded outside the palette', () => {
   assert.deepStrictEqual(literals, [],
     'hardcoded colours outside :root: ' + literals.join(', '));
 });
+
+test('an older local app is named as such, not called unresponsive', () => {
+  // The failure that produced this: start-at-login was still running the
+  // previous build, so /prefs 404'd while /ping answered and the status dot
+  // stayed green. "Not answering" sends you looking for a stopped app that is
+  // plainly running.
+  const fn = code.slice(code.indexOf('async function loadSettings'));
+  const body = fn.slice(0, fn.indexOf('\n      function addMsg'));
+
+  assert.ok(/res\.status === 404/.test(body), 'a missing route is distinguished');
+  assert.ok(/older build/.test(body), 'and reported as an old build');
+  assert.ok(body.indexOf('res.status === 404') < body.indexOf('not answering'),
+    'the specific case is checked before the catch-all');
+});
