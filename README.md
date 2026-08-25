@@ -1,6 +1,6 @@
 # Claude for Google Sheets
 
-A Claude chat sidebar inside Google Sheets, with a restorable edit history — click any past change to roll it back, formats and formulas included. It runs on your own Claude subscription, on your own machine.
+Ask Claude to build, clean up, format and restructure a spreadsheet from a sidebar inside Google Sheets. Every change it makes is reversible on its own — click any past edit to roll it back. Runs locally, on your own Claude subscription.
 
 > Requires [Claude Code](https://claude.com/claude-code) installed and signed in, and Node 18+. Nothing is hosted, no API key is needed, and no Google token is stored anywhere by anyone. An API key works instead if you prefer.
 

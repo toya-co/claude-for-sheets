@@ -14,7 +14,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const https = require('https');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -95,6 +95,20 @@ async function dashToken() {
 }
 
 test.before(async () => {
+  // The certificate is generated, never committed — so a fresh clone has none,
+  // the daemon exits before it listens, and all twenty-odd tests in this file
+  // fail with "daemon never came up", which names the symptom and not the
+  // cause. Make it rather than explain it.
+  const certs = path.join(__dirname, '..', 'certs');
+  if (!fs.existsSync(path.join(certs, 'cert.pem'))) {
+    const made = spawnSync(process.execPath,
+      [path.join(__dirname, '..', 'scripts', 'certs.js')], { encoding: 'utf8' });
+    if (made.status !== 0) {
+      throw new Error('could not make a certificate for the tests:\n' +
+        (made.stderr || made.stdout || '').trim());
+    }
+  }
+
   daemon = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'index.js')], {
     env: { ...process.env, PORT: String(PORT), HOME: TMP, USERPROFILE: TMP },
     stdio: 'ignore',
