@@ -82,3 +82,18 @@ instead.
 
 **Anything with real spreadsheet content.** These are committed to a public repo.
 Prompts stay synthetic.
+
+## If a recording was already committed
+
+Scrubbing the working tree fixes the tip and nothing else — a push uploads every
+revision, so `git show <old>:<path>` still serves whatever was there before.
+`scripts/audit-history.js` scans every blob in history rather than the checkout,
+which is the only view that matches what publishing would expose.
+
+To fix it, `git filter-repo --replace-text scripts/history-replacements.txt`.
+
+**That file must contain nothing but rules.** `--replace-text` has no comment
+syntax: a line beginning with `#` is treated as a match, and one such line
+replaced every `#` in the repository with `***REMOVED***` — every shebang, every
+hex colour, in every commit. Rewrite against a throwaway clone first and audit
+that, not the real repo.

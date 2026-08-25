@@ -1,0 +1,9 @@
+regex:"cwd":"[^"]*"==>"cwd":"/home/user/.claude-sheets/workspace"
+regex:"memory_paths":\{[^}]*\}==>"memory_paths":{"auto":"/home/user/.claude-app/projects/workspace/memory/"}
+regex:"slash_commands":\[[^\]]*\]==>"slash_commands":[]
+regex:"terminal_slash_commands":\[[^\]]*\]==>"terminal_slash_commands":[]
+regex:"skills":\[[^\]]*\]==>"skills":[]
+regex:"agents":\[[^\]]*\]==>"agents":[]
+regex:"plugins":\[[^\]]*\]==>"plugins":[]
+regex:[A-Z]:\\\\Users\\\\[A-Za-z0-9._-]+==>/home/user
+regex:n-[a-z0-9]{20,}-[a-z0-9]+-script\.googleusercontent\.com==>n-<opaque>-0lu-script.googleusercontent.com
