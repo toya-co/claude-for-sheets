@@ -20,9 +20,8 @@
  *
  * Sheet I/O. The only file that touches SpreadsheetApp.
  *
- * The read/write split below is load-bearing, not stylistic. Measured in
- * experiments/undo-probe: writes through the *bound* spreadsheet handle land in
- * the user's native Ctrl+Z stack, and writes through openById() do not. The
+ * The read/write split below is load-bearing, not stylistic. Measured: writes
+ * through the *bound* spreadsheet handle land in the user's native Ctrl+Z stack, and writes through openById() do not. The
  * agent's edits must stay out of that stack so the restorable history is the
  * only thing governing them, so every write goes through writeSpreadsheet_().
  *
