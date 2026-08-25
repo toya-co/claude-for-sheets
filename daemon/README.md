@@ -25,7 +25,8 @@ not slide with use.
 |---|---|
 | `GET /` | Dashboard — pairing approvals, paired sheets, recent activity |
 | `GET /ping` | Health. `{ok, version, credentialReady}` — the sidebar's status dot |
-| `GET /status` | Dashboard state: pending, paired, activity, CLI version |
+| `GET /status` | Dashboard state: pending, paired, activity, CLI version. **Token-guarded** — it is the whole picture, and CORS is `*` |
+| `POST /prefs` | The sidebar's door. `{spreadsheetId}` reads model, askBefore, webAccess and the model list; adding `model` sets it. Gated on the sheet being paired, and it accepts no other key |
 | `POST /turn` | The turn. SSE stream out; body `{spreadsheetId, spreadsheetName, prompt, context}` |
 | `POST /pair` | `{spreadsheetId, allow}` — settles a pending request |
 | `POST /reset` | `{spreadsheetId}` — ends the conversation, keeps the pairing |

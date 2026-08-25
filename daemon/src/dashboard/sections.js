@@ -247,8 +247,13 @@ const setupDocs = () => `
   than in your account. A new sheet made from the template needs nothing. An existing
   sheet needs the add-on added once.</p>
 
-  <h3>With clasp &mdash; one command</h3>
-  <p>From a clone of the repo: <code>cd addon &amp;&amp; clasp push</code></p>
+  <h3>With clasp &mdash; one command, after three of setup</h3>
+  <p>From a clone of the repo: <code>cd addon &amp;&amp; clasp push</code>, once
+  clasp is signed in and pointed at this spreadsheet's script. The full
+  walkthrough is <code>addon/README.md</code> in the repo &mdash; including the
+  account-level <strong>Apps Script API</strong> switch that is off by default
+  and makes every first push fail with an error that sounds like something
+  else.</p>
 
   <h3>By hand &mdash; two files and a toggle</h3>
   <p>Apps Script shares one scope across every script file, so the whole add-on
