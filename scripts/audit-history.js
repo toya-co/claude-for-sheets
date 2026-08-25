@@ -25,7 +25,6 @@ const PATTERNS = [
   ['email', /[\w.+-]+@[\w-]+\.[\w.]{2,}/g],
   ['apps script sandbox origin', /n-[a-z0-9]{20,}-[a-z0-9]+-script\.googleusercontent\.com/g],
   ['google file id', /\b1[A-Za-z0-9_-]{25,}\b/g],
-  ['vault path', /Mainframe/g],
 ];
 
 /** Known-safe matches: placeholders, and third-party addresses in quoted docs. */
