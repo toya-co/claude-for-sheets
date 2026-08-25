@@ -170,4 +170,7 @@ experiments/ Platform probes; re-run before releases
 
 ## License
 
-TBD before first release.
+Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Toyo Co.
+
+Use it, fork it, ship it. Apache rather than MIT for the explicit patent grant:
+a longer file, and one less thing for anyone adopting it to think about.

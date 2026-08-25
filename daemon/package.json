@@ -2,7 +2,7 @@
   "name": "claude-sheets-daemon",
   "version": "0.2.0",
   "private": true,
-  "description": "Local companion app for the Claude Sheets sidebar \u2014 loopback API, credential, dashboard.",
+  "description": "Local companion app for the Claude Sheets sidebar — loopback API, credential, dashboard.",
   "type": "commonjs",
   "main": "src/index.js",
   "scripts": {
@@ -13,5 +13,6 @@
   "engines": {
     "node": ">=18"
   },
-  "dependencies": {}
+  "dependencies": {},
+  "license": "Apache-2.0"
 }
