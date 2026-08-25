@@ -138,9 +138,9 @@ ways, and the difference is whether you want the repo to keep pushing to both:
   sheet's Script ID. Swapping that ID in `.clasp.json` retargets the repo, so
   keep a note of which is which — clasp gives no indication of which spreadsheet
   it is pushing to.
-- **Copy a spreadsheet that already has it.** A bound script is supposed to come
-  with the copy, already installed. Untested here — treat it as the convenient
-  case, not the documented route, until it is.
+- **Copy a spreadsheet that already has it.** The bound script travels with the
+  copy — verified 2026-08-25. The copy asks for authorization once, then works.
+  Nothing to install, and the easiest route by some distance.
 
 Pairing is separate and per-spreadsheet either way: the first turn in a new
 sheet waits for you to approve it in the local app, however the code got there.

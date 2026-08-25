@@ -1,176 +1,111 @@
 # Claude for Google Sheets
 
-A Claude chat sidebar inside Google Sheets, with a **restorable edit history** —
-click any past change to roll back to it, formats and formulas included.
+A Claude chat sidebar inside Google Sheets, with a restorable edit history — click any past change to roll it back, formats and formulas included. It runs on your own Claude subscription, on your own machine.
 
-Two halves, both open source, no server involved:
+> Requires [Claude Code](https://claude.com/claude-code) installed and signed in, and Node 18+. Nothing is hosted, no API key is needed, and no Google token is stored anywhere by anyone. An API key works instead if you prefer.
 
-- **`addon/`** — a container-bound Apps Script add-on. Hosts the sidebar and does
-  all sheet I/O. Requests the `spreadsheets` scope — see **The permission it
-  asks for** below, which is a real ask and worth reading before you install.
-- **`daemon/`** — a local app you run on your own machine. Holds your Claude
-  credential, serves the sidebar over HTTPS loopback, and is also the dashboard.
+## Features
 
-Because the model call originates on your machine, it runs on **your own Claude
-subscription** via a local Claude Code install. No API key required, no inference
-billed to anyone else. If you would rather use an API key, BYOK works too.
+- **Reads before it writes** - it pulls the range it needs, sees the result of each change, and continues. A turn can be many edits
+- **Every change is its own undo entry** - open History and roll back any single one. Values, formulas *and* formatting come back
+- **Anything destructive asks first** - overwriting a formula, replacing more than ten filled cells, clearing, deleting a tab. Writing into empty cells does not ask, because that is not a risk
+- **Your typing wins** - edit a cell while Claude is working and its write aborts rather than overwriting you. It re-reads and carries on
+- **Stop** - Send becomes Stop mid-turn, and Escape does the same. What already landed stays landed and is still undoable
+- **32 sheet tools** - values, formulas, formatting, borders, structure, merge/sort/layout, conditional formats, validation, notes, named ranges
+- **Web search and fetch, gated** - every request stops at an Allow/Skip card showing the full URL. Local and private addresses are refused outright, no card
+- **Model picker** - beside the message box, applies from the next turn
+- **One conversation per spreadsheet** - resumed turn to turn, so "now make it bold" has a referent. **New chat** ends it
+- **A local dashboard** - setup, activity, cost per turn, settings, and reference pages. Its capability list is generated from the tools themselves, so it cannot drift
 
-Nothing is hosted. No Google tokens are stored anywhere, by anyone.
+Not yet: charts, pivot tables, filters, protected ranges. It says so rather than improvising.
 
----
+## Install
 
-## Status
+Two halves. The local app once per machine, the add-on once per spreadsheet.
 
-**M10.6 — everything below release engineering. Near-parity sheet coverage, gated web access, and the local app as the front door.**
-Claude reads ranges when it needs to, then edits values, formulas, and formats (fonts,
-sizes, wrap, alignment); merges, sorts, resizes, freezes, hides, and renames;
-and restructures rows, columns, and tabs — seeing each result and continuing,
-like Claude in Chrome, wrapped in your sidebar. Turns continue each other,
-every change is its own undo entry, and anything destructive asks first. It can
-also search the web and fetch pages — each request stops at an Allow/Skip card
-showing the full URL, and local/private addresses are refused automatically.
-Borders, dropdowns, conditional formatting, notes, and named ranges included.
-Not yet: charts, pivot tables, protected ranges — it will say so rather than
-improvise.
+### 1. The local app
 
-| Milestone | State |
-|---|---|
-| Platform probes (`experiments/`) | ✅ all three passed |
-| M1 add-on skeleton | ✅ verified in a live sheet |
-| M2 daemon: HTTPS loopback, pairing, `claude -p` | ✅ verified by `curl` |
-| M3 first real round-trip edit | ✅ architecture checkpoint passed |
-| M4 streaming · M6 one-button undo | ✅ landed with M3 |
-| M4.5 one conversation per spreadsheet | ✅ memory, and 5.5× cheaper per turn |
-| M5 multi-op turns + confirmation gate | ✅ four value ops, per-op undo, stale-context guard |
-| M5.7 live tool loop (read, write, continue) | ✅ verified end to end |
-| M7 restorable history | ✅ undo any entry; blocked when a later edit overlaps |
-| M8 rows, columns, and tabs — with undo | ✅ deletes snapshot first; sheet deletes always ask |
-| M9 mid-turn edit detection | ✅ your typing aborts Claude's write, never the reverse |
-| M8.5 capability parity tier 1 | ✅ merge, sort, resize, freeze, hide, rename — all undoable |
-| M5.5 web search and fetch, behind the gate | ✅ every request is an Allow/Skip card; local addresses auto-refused |
-| Tier 2: borders, dropdowns, conditional formats, notes, named ranges | ✅ all undoable, borders via the Sheets API |
-| M10 dashboard | ✅ setup, activity, settings, reference, diagnostics — capability list generated from the tools |
-| M10.5 regression suite | ✅ `npm run check`: automated pass, then a manual one with expected output per step |
-| M10.6 start at login | ✅ verified across a real reboot |
-| Stop, and standing permission for web search | ✅ Stop ends a turn mid-flight; search can be allowed for the session |
-| Model picker in the sidebar | ✅ the preference is editable there; the protections stay in the local app |
-| M11 release engineering | next — install docs, template sheet, CI, release tag |
+```bash
+git clone <this repo> && cd claude-sheets-sidebar/daemon
+npm run certs     # once — makes the loopback certificate
+npm start
+```
 
-Full plan in [`ARCHITECTURE.md`](ARCHITECTURE.md). The platform verification
-behind it is in [`PLAN.md`](PLAN.md).
+No dependencies to install; it is Node standard library only. Open **https://localhost:8443/** and accept the certificate warning once per browser — it is self-signed, for your own machine, and a browser has no way to tell the difference.
 
----
+That page is the dashboard. Leave it open or don't; the app runs either way.
 
-## Try it
+### 2. The add-on
 
-You need a Google account, a scratch spreadsheet, and Claude Code installed and
-signed in.
+Three routes, easiest first. All three end at the same place.
 
-1. `cd daemon && npm run certs && npm start`, then open
-   **https://localhost:8443/** once and accept the self-signed certificate.
-2. Open a spreadsheet → **Extensions ▸ Apps Script**.
-3. Add the add-on to that spreadsheet — `cd addon && clasp push`, or paste two
-   files by hand. Either way it is five minutes, and
-   [`addon/README.md`](addon/README.md) is the full walkthrough including the
-   account setting that makes every first `clasp push` fail.
-4. Save, reload the spreadsheet tab, then **Claude ▸ Open sidebar** and authorize.
-5. Ask for a change — "put today's total in B7". The first request for a new
-   spreadsheet waits for you to approve it on the dashboard.
+**Copy a spreadsheet that already has it.** The bound script travels with the copy. Open the copy, **Claude ▸ Open sidebar**, authorize once, and it works — nothing to install. This is what a template sheet is for.
 
-Then ask a follow-up that refers back to the first ("now make it bold") to see
-the conversation carry, and **History** to roll any single change back.
+**Paste two files.** For a spreadsheet you already have and care about.
 
-Run the tests with `npm test` from the repo root. No browser, no Google account,
-no Claude invocation — the add-on half runs against a fake `SpreadsheetApp` and
-the daemon half against recorded CLI output.
+1. **Extensions ▸ Apps Script**
+2. Paste [`addon/dist/Claude.gs`](addon/dist/Claude.gs) over the default `Code.gs`
+3. Add an HTML file named exactly `Sidebar` and paste [`addon/Sidebar.html`](addon/Sidebar.html) into it
+4. **Services ▸ +** and add **Google Sheets API**
+5. Save, reload the spreadsheet tab, then **Claude ▸ Open sidebar** and authorize
 
----
+**With clasp.** `cd addon && clasp push`. Worth the setup only if you intend to track this repo — [`addon/README.md`](addon/README.md) is the walkthrough, including the account-level Apps Script API switch that makes every first push fail.
 
-## Design notes worth knowing
+The first turn in a new spreadsheet waits for you to approve it on the dashboard. That approval happens there and not in the sidebar on purpose: a web page must not be able to grant itself access.
 
-**If you type while Claude is working, you win.** Every write carries a
-fingerprint of the data Claude read. Apps Script re-checks it in the same
-instant it writes, so an edit you made in between aborts the write rather than
-being silently overwritten — the whole turn stops before anything changes,
-Claude re-reads, and continues against what is actually there. A second signal
-catches edits outside the range it was looking at.
+## Usage
 
-**Nothing destructive happens without a question.** Overwriting a formula asks
-every time, even for one cell — replacing a formula with its own current value
-looks like nothing changed and quietly kills what computed it. Overwriting more
-than ten cells that already hold something asks. Clearing anything asks. Writing
-into empty cells does not, because that is not a risk. The check runs in Apps
-Script rather than the sidebar, so a prompt injection hidden in a cell cannot
-talk its way past it.
+Ask for a change — *"put the total in B7 and bold it"*. Then ask a follow-up that refers back to it — *"now make it a percentage"* — to see the conversation carry.
 
-**The permission it asks for.** Google's consent screen will say this add-on can
-see and edit **all** your spreadsheets, and that is accurate about the grant. It
-is not what the add-on does: every call it makes targets the spreadsheet it is
-installed in, the code is here to read, and no Google token is stored anywhere by
-anyone.
+- **History** (the clock icon) - every change, newest first. Click Undo on any one
+- **New chat** (the + icon) - ends the conversation. The sheet's edit history is untouched
+- **Settings** (the third icon) - shows what the app is set to, and links to the dashboard for the rest
 
-The reason is a platform constraint rather than a choice. The narrow
-`spreadsheets.currentonly` scope and `SpreadsheetApp.openById()` are mutually
-exclusive in Apps Script, and `openById` is the only measured way to write
-without landing in your native Ctrl+Z stack. So the options were the broad scope
-with a real restorable history, or the narrow scope with Claude's edits tangled
-into your own undo. This build takes the first. If that trade is wrong for you,
-it is the one decision in the design worth forking over.
+Per-spreadsheet instructions live on the dashboard: *"Dates as ISO. Keep totals bold. Never edit column A."*
 
-**Agent edits do not touch your Ctrl+Z.** Writes go through
-`SpreadsheetApp.openById()` rather than the bound handle, which — measured, not
-assumed — keeps them out of the native undo stack. Your own typing still undoes
-normally; Claude's changes are governed entirely by the in-sheet history. Two
-undo systems that never touch the same edits.
+## The permission it asks for
 
-**The conversation is per spreadsheet, and endable.** Each sheet gets its own
-Claude Code session, resumed turn to turn, so context carries and the CLI's
-startup cost is read from cache instead of paid again. **New chat** ends it. The
-transcript lives in Claude Code's own store under a neutral workspace path — not
-mixed into your coding history.
+Google's consent screen will say this add-on can see and edit **all** your spreadsheets. That is accurate about the grant and not about what it does — every call it makes targets the spreadsheet it is installed in, and the code is here to read.
 
-**A turn can be stopped.** Send becomes **Stop** while Claude is working, and
-Escape does the same from the keyboard. Stopping closes the stream, which is
-what the local app reads as the end of the turn: it ends the CLI process and
-answers anything still outstanding, so nothing arrives late and nothing is left
-running. Work already written to the sheet stays written — Stop ends the turn,
-it does not reverse it — and each edit is still its own history entry. The
-conversation survives, so you can correct yourself and carry on.
+The reason is a platform constraint. Apps Script's narrow `spreadsheets.currentonly` scope and `SpreadsheetApp.openById()` are mutually exclusive, and `openById` is the only measured way to write without landing in your native Ctrl+Z stack. So the choice was a real restorable history with the broad scope, or the narrow scope with Claude's edits tangled into your own undo. This takes the first. If that trade is wrong for you, it is the one decision worth forking over.
 
-**One setting is editable from the sidebar, and it is the harmless one.** The
-model picker is there, because a wrong model costs money or quality and you see
-it on the next turn. What Claude asks before changing, and whether it can reach
-the web, are not there: those are protections, and a page that could switch one
-off would have taken something away silently. They change in the local app,
-which no web page can reach. The route the sidebar uses accepts a model and
-ignores everything else it is sent.
+**Ctrl+Z does not undo Claude's edits, and that is deliberate.** Your own typing undoes normally; Claude's changes are governed entirely by the in-sheet history. Two undo systems that never touch the same edits — otherwise one keystroke could collapse a whole turn's work with no record of what it removed.
 
-**History lives in your spreadsheet.** Snapshots go to a hidden
-`__claude_history__` sheet, so they never leave the file, travel with it when
-shared, and restore even with the daemon closed. A safety feature should not have
-a running-process dependency.
+## How it works
 
-**Everything rests on three probes.** The sidebar reaching non-Google origins,
-`openById` escaping native undo, and the sidebar reaching `127.0.0.1` over TLS
-are all **undocumented** Google behaviors that were measured rather than looked
-up. `experiments/` re-runs all three in a few minutes; do that before any release.
+The add-on never sees the model. The local app never sees Google.
 
----
+Apps Script hosts the sidebar and does all sheet I/O. The sidebar talks over HTTPS loopback to the local app, which holds your Claude credential and runs the turn. When Claude calls a tool, the **sidebar** executes it — the local app only relays. So a prompt injection hidden in a cell is talking to something that cannot write to your sheet.
 
-## Repo layout
+History lives in a hidden `__claude_history__` sheet inside your spreadsheet, so snapshots never leave the file, travel with it when shared, and restore even with the app closed.
+
+Full design in [`ARCHITECTURE.md`](ARCHITECTURE.md). The op contract both halves depend on is [`shared/protocol.md`](shared/protocol.md).
+
+## Updating
+
+`git pull`, then quit the local app from the dashboard and start it again. If you installed the add-on by pasting, re-paste both files; with clasp, `clasp push --force`.
+
+A sidebar newer than the local app will tell you so rather than claiming the app is unreachable. Start-at-login means there is usually already one running, so `npm start` alone will refuse the port.
+
+## Development
+
+```bash
+npm test          # 257 tests, ~2s
+npm run check     # release preflight: automated pass, then a manual checklist
+npm run bundle    # regenerate addon/dist/Claude.gs
+```
+
+No browser, no Google account, and no Claude invocation are involved — the add-on half runs against a fake `SpreadsheetApp`, the daemon half against recorded CLI output.
 
 ```
-addon/       Apps Script add-on — sidebar host, sheet I/O, undo history
-addon/test/  Runs the .gs files against a fake SpreadsheetApp
+addon/       Apps Script — sidebar, sheet I/O, history
 daemon/      Local app — credential, loopback API, dashboard
-daemon/test/ stream-json fixtures from the real CLI
 shared/      Op protocol — the contract both halves depend on
 experiments/ Platform probes; re-run before releases
 ```
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Toyo Co.
+[Apache-2.0](LICENSE) © Toyo Co.
 
-Use it, fork it, ship it. Apache rather than MIT for the explicit patent grant:
-a longer file, and one less thing for anyone adopting it to think about.
+Apache rather than MIT for the explicit patent grant — a longer file, and one less thing for anyone adopting it to think about.
