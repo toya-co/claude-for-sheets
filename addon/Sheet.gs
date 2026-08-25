@@ -66,7 +66,15 @@ function writeSpreadsheet_() {
 function sanitizeGrid_(grid) {
   return grid.map(function (row) {
     return row.map(function (cell) {
-      if (cell instanceof Date) return cell.toISOString();
+      // Object.prototype.toString rather than `instanceof Date`. instanceof
+      // compares against one realm's constructor, so a Date from anywhere else
+      // slips straight through — and a Date that slips through does not throw,
+      // it makes google.script.run fail during serialization, where NEITHER
+      // handler fires and the call simply never returns. The stronger check
+      // costs one call and the weaker one fails silently.
+      if (Object.prototype.toString.call(cell) === '[object Date]') {
+        return cell.toISOString();
+      }
       return cell;
     });
   });
