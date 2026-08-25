@@ -205,16 +205,54 @@ test('every element the script drives exists in the markup', () => {
     'referenced but not in the markup: ' + missing.join(', '));
 });
 
-test('the empty state is driven from one place, not scattered', () => {
-  // It used to be set inline in the history toggle and nowhere else, so any
-  // path that added a message left the banner sitting above the transcript.
-  const calls = (code.match(/syncEmptyState\(\)/g) || []).length;
-  assert.ok(calls >= 3,
-    'expected the definition plus addMsg plus the history toggle, got ' + calls);
+test('exactly one function decides which panel is visible', () => {
+  // Three panels and three independent toggles would guarantee a state with
+  // two open at once, and an empty state disagreeing with both. showView owns
+  // it; nothing else may set any panel's display.
+  const outside = code.replace(/function showView[\s\S]*?\n      }/, '');
+  for (const id of ['banner', 'log', 'hist', 'settings']) {
+    const re = new RegExp("\\$\\('" + id + "'\\)\\.style\\.display\\s*=");
+    assert.ok(!re.test(outside),
+      '#' + id + " is shown or hidden outside showView");
+  }
+  assert.ok(/function showView/.test(code), 'showView exists');
+  assert.ok(/showView\(/.test(code.replace(/function showView/g, '')),
+    'and something calls it');
+});
 
-  const outside = code.replace(/function syncEmptyState[\s\S]*?\n      }/, '');
-  assert.ok(!/\$\('banner'\)\.style\.display\s*=/.test(outside),
-    'nothing outside syncEmptyState may set the banner directly');
+test('every panel the header can reach actually exists', () => {
+  // A toggle pointing at a missing element throws inside the click handler,
+  // which in a sidebar looks like a dead button rather than an error.
+  const markup = html.replace(/<script>[\s\S]*?<\/script>/g, '');
+  for (const id of ['banner', 'log', 'hist', 'settings']) {
+    assert.ok(markup.includes('id="' + id + '"'), '#' + id + ' is in the markup');
+  }
+  for (const id of ['newChat', 'toggleHist', 'toggleSettings']) {
+    assert.ok(markup.includes('id="' + id + '"'), '#' + id + ' control exists');
+    assert.ok(code.includes("'" + id + "'"), '#' + id + ' is wired');
+  }
+});
+
+test('the icon controls are reachable without a mouse', () => {
+  // They are spans, not buttons, so the keyboard handling a button would have
+  // given for free has to be explicit.
+  const markup = html.replace(/<script>[\s\S]*?<\/script>/g, '');
+  const roles = (markup.match(/role="button" tabindex="0"/g) || []).length;
+  assert.ok(roles >= 3, 'each icon control is focusable, got ' + roles);
+  assert.ok(/e\.key === 'Enter' \|\| e\.key === ' '/.test(code),
+    'and Enter or Space activates them');
+  assert.ok(/title="/.test(markup), 'and they have accessible names');
+});
+
+test('settings are shown but not changed from here', () => {
+  // POST /settings requires the dashboard token, which the sidebar does not
+  // have and should not get: CORS cannot be an auth boundary, so any page
+  // knowing a paired spreadsheet id could otherwise disable the gate.
+  const fn = code.slice(code.indexOf('async function loadSettings'));
+  const body = fn.slice(0, fn.indexOf('\n      $('));
+  assert.ok(!/method: 'POST'/.test(body), 'the settings view never writes');
+  assert.ok(/\/status/.test(body), 'it reads the live values');
+  assert.ok(/Change in the local app/.test(body), 'and sends you where they can change');
 });
 
 test('the starter chips are wired to something that reads them', () => {

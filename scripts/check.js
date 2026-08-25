@@ -76,8 +76,9 @@ function environment() {
     node: process.version,
     claudeCode: claudeVersion || 'NOT FOUND',
     app: require(path.join(ROOT, 'daemon', 'package.json')).version,
-    clasp: tryExec('npx', ['clasp', '--version']) || 'not installed',
-    certExpires: cert || 'unknown',
+    clasp: tryExec('npx', ['clasp', '--version'])
+      || tryExec('clasp', ['--version']) || 'not on PATH (npx clasp still works)',
+    certExpires: cert || 'openssl not on PATH',
     // Filled in by hand — no reliable way to read the browser from here, and
     // the sidebar is a browser surface, so it matters.
     chrome: process.env.CHROME_VERSION || '(fill in)',
