@@ -187,3 +187,82 @@ test('the sidebar never hardcodes a sheet or spreadsheet id', () => {
   assert.ok(!/openById\(['"][A-Za-z0-9_-]{20,}/.test(raw));
   assert.ok(!/spreadsheets\/d\/[A-Za-z0-9_-]{20,}/.test(raw));
 });
+
+// ------------------------------------------------------- the design pass
+
+const markup = html.replace(/<script>[\s\S]*?<\/script>/g, '');
+
+test('every element the script drives exists in the markup', () => {
+  // A renamed id makes $() return null and the handler dies mid-render,
+  // usually leaving a panel that looks fine but has quietly stopped updating.
+  const ids = new Set();
+  let m;
+  const re = /\$\('([A-Za-z0-9_-]+)'\)/g;
+  while ((m = re.exec(code)) !== null) ids.add(m[1]);
+
+  const missing = [...ids].filter((id) => !markup.includes('id="' + id + '"')).sort();
+  assert.deepStrictEqual(missing, [],
+    'referenced but not in the markup: ' + missing.join(', '));
+});
+
+test('the empty state is driven from one place, not scattered', () => {
+  // It used to be set inline in the history toggle and nowhere else, so any
+  // path that added a message left the banner sitting above the transcript.
+  const calls = (code.match(/syncEmptyState\(\)/g) || []).length;
+  assert.ok(calls >= 3,
+    'expected the definition plus addMsg plus the history toggle, got ' + calls);
+
+  const outside = code.replace(/function syncEmptyState[\s\S]*?\n      }/, '');
+  assert.ok(!/\$\('banner'\)\.style\.display\s*=/.test(outside),
+    'nothing outside syncEmptyState may set the banner directly');
+});
+
+test('the starter chips are wired to something that reads them', () => {
+  const chips = (markup.match(/data-ask=/g) || []).length;
+  assert.ok(chips >= 3, 'the empty state offers starters, got ' + chips);
+  assert.ok(/dataset\.ask/.test(code), 'and something reads them');
+  assert.ok(/closest\('li\[data-ask\]'\)/.test(code),
+    'delegated via the list, so a click on the inner text still counts');
+});
+
+test('the composer re-fits itself after sending', () => {
+  // Otherwise the box keeps the height of the message just sent and sits
+  // several lines tall around an empty value.
+  const fn = code.slice(code.indexOf('async function send()'));
+  const head = fn.slice(0, fn.indexOf('await refreshContext'));
+  assert.ok(/autoGrow\(\)/.test(head), 'send() re-fits the box after clearing it');
+  assert.ok(/addEventListener\('input', autoGrow\)/.test(code), 'and it grows while typing');
+});
+
+test('waiting on the model shows something', () => {
+  // Between Send and the first token the panel would otherwise sit blank for
+  // a second or two, which reads as broken rather than busy.
+  assert.ok(/class="thinking"/.test(code), 'a pending indicator is rendered');
+  assert.ok(/@keyframes pulse/.test(html), 'and it is animated');
+  assert.ok(/prefers-reduced-motion/.test(html), 'but not for people who asked it not to be');
+});
+
+test('both themes are defined at token level', () => {
+  // A colour whose only definition sits inside the dark block renders
+  // unstyled in light mode, which is the classic unreadable-panel bug.
+  assert.ok(/@media \(prefers-color-scheme: dark\)/.test(html), 'a dark palette exists');
+
+  const at = html.indexOf('prefers-color-scheme: dark');
+  const darkBlock = html.slice(at, html.indexOf('* { box-sizing', at));
+  const darkTokens = darkBlock.match(/--[a-z0-9-]+:/g) || [];
+  assert.ok(darkTokens.length >= 10,
+    'the dark block redefines the palette, got ' + darkTokens.length);
+
+  assert.ok(/background:var\(--paper\)/.test(html),
+    'body paints its own ground rather than inheriting the host page');
+});
+
+test('no colour is hardcoded outside the palette', () => {
+  // Every rule must go through a token, or one theme gets the other theme's
+  // colours on it.
+  const styles = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
+  const body = styles.slice(styles.indexOf('* { box-sizing'));
+  const literals = body.match(/#[0-9a-fA-F]{3,6}\b/g) || [];
+  assert.deepStrictEqual(literals, [],
+    'hardcoded colours outside :root: ' + literals.join(', '));
+});
