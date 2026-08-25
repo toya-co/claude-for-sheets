@@ -123,15 +123,10 @@ async function automated() {
   // Node refuses to spawn .cmd files on Windows (EINVAL, the batch-argument
   // injection fix), so npm is never invoked here. Run the test files directly
   // and build the bundle in-process -- fewer moving parts, and faster.
-  const testFiles = [];
-  // Keep in step with the `test` script in package.json — a directory missing
-  // here is a suite the release gate silently does not run.
-  for (const dir of [path.join(ROOT, 'daemon', 'test'), path.join(ROOT, 'addon', 'test'),
-                     path.join(ROOT, 'scripts', 'test')]) {
-    for (const f of fs.readdirSync(dir)) {
-      if (f.endsWith('.test.js')) testFiles.push(path.join(dir, f));
-    }
-  }
+  // Shared with `npm test` rather than listed again here. Two copies of "where
+  // the tests live" is how a new suite gets run by one and silently skipped by
+  // the other — and the release gate is the worse one to skip it.
+  const testFiles = require('./test').testFiles();
   const tests = spawnSync(process.execPath, ['--test'].concat(testFiles),
     { cwd: ROOT, encoding: 'utf8' });
   const out = (tests.stdout || '') + (tests.stderr || '');

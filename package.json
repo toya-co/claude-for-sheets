@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "private": true,
   "scripts": {
-    "test": "node --test daemon/test/*.test.js addon/test/*.test.js scripts/test/*.test.js",
+    "test": "node scripts/test.js",
     "bundle": "node addon/bundle.js",
     "check": "node scripts/check.js"
   },
