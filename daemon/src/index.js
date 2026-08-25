@@ -328,7 +328,11 @@ async function handleTurn(req, res) {
   // every write this turn. It comes from here rather than from anything the
   // model said: the value is the user's own choice, made in the dashboard,
   // and Claude has no way to influence it.
-  send({ type: 'settings', askBefore: settings.askBefore });
+  // webAccess rides along so the sidebar's web-search toggle can tell the
+  // difference between "you have not allowed searches" and "searches are off
+  // entirely" — without it the toggle offers a permission that cannot apply.
+  send({ type: 'settings', askBefore: settings.askBefore,
+         webAccess: settings.webAccess !== false });
 
   // The tool loop: this turn's CLI process gets an MCP server (mcp-bridge.js)
   // whose every call lands back here, tagged with a token only that bridge

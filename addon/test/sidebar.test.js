@@ -196,6 +196,51 @@ test('Send becomes Stop while a turn is running', () => {
     'the controller exists before the first await');
 });
 
+test('standing web permission covers search but never fetch', () => {
+  // The two are different risks: a search sends a query to a search engine, a
+  // fetch sends whatever Claude puts in a URL to whatever host it names. If this
+  // ever stops distinguishing them, the gate has quietly become optional.
+  const fn = code.slice(code.indexOf('function handleGate'));
+  const body = fn.slice(0, fn.indexOf('function handleToolCall'));
+
+  const auto = /if \(ev\.tool === 'WebSearch' && autoAllowSearch\)/.exec(body);
+  assert.ok(auto, 'the auto-allow shortcut is reached only for WebSearch');
+  assert.ok(body.indexOf('postGateResult(ev.gateId, true)') > auto.index,
+    'nothing is allowed before the tool is checked');
+  assert.ok(/if \(ev\.tool === 'WebSearch'\)\s*\{[\s\S]{0,400}?setAutoWeb\(true\)/.test(body),
+    "the card's Always button is offered for search only");
+});
+
+test('an auto-allowed search still leaves a card behind', () => {
+  // Silent permission is the failure mode: a request the user never saw is
+  // exactly what the gate exists to prevent, allowed or not.
+  const fn = code.slice(code.indexOf('function handleGate'));
+  const branch = fn.slice(fn.indexOf('autoAllowSearch)'), fn.indexOf('const what'));
+  assert.ok(/node\.innerHTML =/.test(branch), 'the transcript records the search');
+  assert.ok(/Allowed automatically/.test(branch), 'and says why it was not asked about');
+});
+
+test('standing permission is per sidebar, not stored anywhere', () => {
+  // It must not become daemon state: the sidebar is the injectable half, so a
+  // rule it can set is a rule a hostile page can aim at (ARCHITECTURE 11.6).
+  assert.ok(/let autoAllowSearch = false/.test(code), 'it starts off every load');
+  assert.ok(!/POST[\s\S]{0,80}autoAllowSearch/.test(code) &&
+            !/autoAllowSearch[\s\S]{0,80}\/settings/.test(code),
+    'it is never sent to the daemon');
+  assert.ok(!/localStorage|sessionStorage/.test(code), 'and never persisted in the page');
+
+  const newChat = code.slice(code.indexOf("$('newChat').onclick"));
+  assert.ok(newChat.slice(0, newChat.indexOf('guardState')).includes('setAutoWeb(false)'),
+    'a new conversation does not inherit the last one\'s permissions');
+});
+
+test('the toggle cannot grant what the daemon has turned off', () => {
+  assert.ok(/autoAllowSearch = on && webAvailable/.test(code),
+    'arming it requires web access to actually be on');
+  assert.ok(/webAvailable = ev\.webAccess !== false/.test(code),
+    'availability comes from the turn, not from a guess');
+});
+
 test('Escape stops a turn but never sends one', () => {
   const handler = code.slice(code.indexOf("$('prompt').addEventListener('keydown'"));
   const fn = handler.slice(0, handler.indexOf('});') + 3);

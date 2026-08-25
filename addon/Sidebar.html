@@ -223,6 +223,17 @@
       button.send.stop {
         background:transparent; color:var(--fg); border-color:var(--rule);
       }
+      /* A standing choice, not an action — so it reads as a setting, and reads
+         differently once armed. */
+      button.chip {
+        font:inherit; font-size:11.5px; padding:3px 9px; border-radius:6px;
+        border:1px solid var(--rule); background:transparent; color:var(--fg-faint);
+        cursor:pointer; white-space:nowrap;
+      }
+      button.chip:hover { color:var(--fg); }
+      button.chip[aria-pressed="true"] {
+        color:var(--live); border-color:var(--live); background:var(--live-bg);
+      }
       button.send.stop::before {
         content:''; display:inline-block; width:8px; height:8px; margin-right:7px;
         background:var(--bad); border-radius:2px; vertical-align:baseline;
@@ -285,6 +296,9 @@
       <div class="composer">
         <textarea id="prompt" rows="1" placeholder="Ask Claude to change this sheet…"></textarea>
         <div class="row">
+          <button class="chip" id="autoWeb" type="button"
+                  title="Stop asking before each web search, until this sidebar closes"
+                  aria-pressed="false">Web search: ask</button>
           <span id="hint"></span>
           <span class="spacer"></span>
           <button class="send" id="send">Send</button>
@@ -360,7 +374,10 @@
         box.innerHTML = '<h3>Settings</h3>' +
           field('Model', s.model || 'default') +
           field('Ask before changes', asks) +
-          field('Web search and fetch', s.webAccess === false ? 'Off' : 'On, each request approved') +
+          field('Web search and fetch', s.webAccess === false ? 'Off'
+            : autoAllowSearch
+            ? 'On — searches allowed for this sidebar, fetches approved each time'
+            : 'On, each request approved') +
           '<a class="button" href="' + DAEMON + '/#settings" target="_blank" rel="noopener">' +
           'Change in the local app</a>' +
           '<div class="note">Settings live in the local app because the gate they ' +
@@ -542,10 +559,55 @@
         }).catch(() => {});
       }
 
+      /**
+       * Standing permission for web SEARCH only, for as long as this sidebar is
+       * open.
+       *
+       * Search and fetch are not the same risk and are deliberately not treated
+       * the same. A search sends a query to a search engine; a fetch can send
+       * whatever Claude puts in a URL to whatever host Claude names, which is
+       * the shape data leaves in. So fetch keeps asking every time, and no
+       * toggle here changes that.
+       *
+       * It lives in this page and nowhere else — not in settings, not on the
+       * daemon. A standing rule that outlived the sidebar would be standing
+       * state, and standing state belongs behind the dashboard token
+       * (ARCHITECTURE.md §11.6): the sidebar is the injectable half, so a rule
+       * it could set is a rule a hostile page could aim at. Closing the sidebar,
+       * reloading, or starting a new chat puts it back to asking.
+       */
+      let autoAllowSearch = false;
+      let webAvailable = true;   // until a turn tells us otherwise
+
+      function setAutoWeb(on) {
+        autoAllowSearch = on && webAvailable;
+        const b = $('autoWeb');
+        b.disabled = !webAvailable;
+        b.textContent = !webAvailable ? 'Web search: off'
+                      : autoAllowSearch ? 'Web search: always' : 'Web search: ask';
+        b.setAttribute('aria-pressed', String(autoAllowSearch));
+        b.title = !webAvailable
+          ? 'Web access is turned off in the local app, so nothing is searched or fetched'
+          : autoAllowSearch
+          ? 'Searches run without asking until this sidebar closes. Fetching a page still asks.'
+          : 'Stop asking before each web search, until this sidebar closes';
+      }
+
       function handleGate(ev, container) {
         const node = container.appendChild(document.createElement('div'));
         node.className = 'op ask';
         const d = ev.detail || {};
+
+        // Standing permission, so answer without asking — but still leave the
+        // card behind. An allowed search that left no trace would be a request
+        // the user never saw, which is the thing the gate exists to prevent.
+        if (ev.tool === 'WebSearch' && autoAllowSearch) {
+          node.className = 'op done';
+          node.innerHTML = 'searched <span class="a1">' + esc(d.query || '') + '</span>' +
+            '<div class="why">Allowed automatically — web search is set to always.</div>';
+          return postGateResult(ev.gateId, true);
+        }
+
         const what = ev.tool === 'WebSearch'
           ? 'search the web for<br><span class="a1">' + esc(d.query || '') + '</span>'
           : 'fetch<br><span class="a1" style="word-break:break-all">' + esc(d.url || '') + '</span>';
@@ -571,6 +633,17 @@
         node.appendChild(document.createElement('br'));
         node.appendChild(yes);
         node.appendChild(no);
+
+        // The same standing permission as the composer toggle, offered where the
+        // decision is actually being made. Search only — see setAutoWeb.
+        if (ev.tool === 'WebSearch') {
+          const always = document.createElement('button');
+          always.textContent = 'Always';
+          always.title = 'Allow this and every later search, until this sidebar closes';
+          always.style.marginLeft = '6px';
+          always.onclick = () => { setAutoWeb(true); yes.onclick(); };
+          node.appendChild(always);
+        }
       }
 
       function handleToolCall(ev, container) {
@@ -857,6 +930,8 @@
                 handleToolCall(ev, node);
               } else if (ev.type === 'settings') {
                 askBefore = ev.askBefore || 'destructive';
+                webAvailable = ev.webAccess !== false;
+                setAutoWeb(autoAllowSearch);   // re-reads availability
               } else if (ev.type === 'gate') {
                 handleGate(ev, node);
               } else if (ev.type === 'text') {
@@ -919,6 +994,8 @@
         // any check that could return early, and before any await that could throw.
         stopTurn();
         setSending(false);
+        // A new conversation does not inherit the last one's permissions.
+        setAutoWeb(false);
         guardState = null;
         $('log').innerHTML = '';
 
@@ -957,6 +1034,7 @@
       }
       $('prompt').addEventListener('input', autoGrow);
 
+      $('autoWeb').onclick = () => setAutoWeb(!autoAllowSearch);
       $('send').onclick = () => (turnAbort ? stopTurn() : send());
       // Enter sends; Shift+Enter makes a newline. Chat convention, and the
       // textarea would otherwise insert a line break before send() ever ran.
