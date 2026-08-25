@@ -238,24 +238,44 @@
       }
       /* A standing choice, not an action — so it reads as a setting, and reads
          differently once armed. */
-      button.chip {
-        font:inherit; font-size:11.5px; padding:3px 9px; border-radius:6px;
+      /*
+       * One chip, worn by a button and a select alike, so the composer row
+       * reads as a strip of controls rather than a dropdown parked beside a
+       * button. Every declaration lives here and neither element gets its own
+       * size, colour, or radius — that is what keeps them identical when one
+       * of them is later adjusted.
+       */
+      .chip {
+        font:inherit; font-size:11.5px; line-height:1.45; padding:3px 9px;
+        height:23px; border-radius:6px;
         border:1px solid var(--rule); background:transparent; color:var(--fg-faint);
         cursor:pointer; white-space:nowrap;
       }
-      button.chip:hover { color:var(--fg); }
+      .chip:hover { color:var(--fg); }
       button.chip[aria-pressed="true"] {
         color:var(--live); border-color:var(--live); background:var(--live-bg);
       }
-      /* The model picker wears the same chip, so the composer row reads as one
-         strip of controls rather than a select bolted next to a button. */
-      select.chip.pick {
-        font:inherit; font-size:11.5px; padding:3px 4px 3px 8px; max-width:104px;
-        color:var(--fg-dim); cursor:pointer;
+      /*
+       * The native select chrome is the whole difference between the two: its
+       * own arrow, its own metrics, and on some platforms its own background.
+       * Stripped, and the caret redrawn on the wrapper — a select cannot carry
+       * a pseudo-element, and a caret baked into a background image would be a
+       * colour outside the palette that could not follow the theme.
+       */
+      select.chip {
+        appearance:none; -webkit-appearance:none;
+        padding-right:21px; max-width:112px; text-overflow:ellipsis;
       }
-      select.chip.pick:hover { color:var(--fg); }
+      .chipsel { position:relative; display:inline-flex; flex:none; }
+      .chipsel::after {
+        content:''; position:absolute; right:8px; top:50%; margin-top:-1px;
+        width:0; height:0; pointer-events:none;
+        border-left:3.5px solid transparent; border-right:3.5px solid transparent;
+        border-top:4px solid var(--fg-faint);
+      }
+      .chipsel:hover::after { border-top-color:var(--fg); }
       /* Not paired yet: there is no setting to show, so it takes no space. */
-      select.chip.pick:empty { display:none; }
+      .chipsel.empty { display:none; }
       button.send.stop::before {
         content:''; display:inline-block; width:8px; height:8px; margin-right:7px;
         background:var(--bad); border-radius:2px; vertical-align:baseline;
@@ -318,7 +338,8 @@
       <div class="composer">
         <textarea id="prompt" rows="1" placeholder="Ask Claude to change this sheet…"></textarea>
         <div class="row">
-          <select class="chip pick" id="modelBar" title="Model — used from the next turn"></select>
+          <span class="chipsel empty" id="modelWrap"><select class="chip" id="modelBar"
+                  title="Model — takes effect from the next turn"></select></span>
           <button class="chip" id="autoWeb" type="button"
                   title="Stop asking before each web search, until this sidebar closes"
                   aria-pressed="false">Web: ask</button>
@@ -637,7 +658,11 @@
        */
       function renderModels(models, current) {
         const sel = $('modelBar');
-        if (!Array.isArray(models) || !models.length) { sel.innerHTML = ''; return; }
+        const ok = Array.isArray(models) && models.length;
+        // The wrapper carries the caret, so it is what hides — a bare `:empty`
+        // select would collapse but leave an arrow floating in the row.
+        $('modelWrap').classList.toggle('empty', !ok);
+        if (!ok) { sel.innerHTML = ''; return; }
         sel.innerHTML = models.map((m) =>
           '<option value="' + esc(m.id) + '"' + (m.id === current ? ' selected' : '') +
           '>' + esc(m.label) + '</option>').join('');

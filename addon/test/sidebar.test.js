@@ -440,3 +440,30 @@ test('an older local app is named as such, not called unresponsive', () => {
   assert.ok(body.indexOf('res.status === 404') < body.indexOf('not answering'),
     'the specific case is checked before the catch-all');
 });
+
+test('the two composer chips are one style, not two that match today', () => {
+  // The picker and the web toggle sit side by side and must be indistinguishable
+  // apart from their content. Two rules that happen to agree drift the first
+  // time one is touched, so the shared look lives in `.chip` and the select's
+  // own rule may only strip native chrome.
+  const styles = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
+  const rule = (selector) => {
+    const at = styles.indexOf(selector + ' {');
+    assert.ok(at !== -1, 'missing rule: ' + selector);
+    return styles.slice(at, styles.indexOf('}', at));
+  };
+
+  const shared = rule('.chip');
+  for (const prop of ['font-size', 'padding', 'border-radius', 'border', 'color']) {
+    assert.ok(shared.includes(prop + ':'), '.chip should own ' + prop);
+  }
+
+  // The select may resize itself and drop the native arrow. Anything else is a
+  // second source of truth for how a chip looks.
+  const sel = rule('select.chip');
+  for (const prop of ['font-size', 'border-radius', 'border:', 'color:', 'background']) {
+    assert.ok(!sel.includes(prop),
+      'select.chip redefines ' + prop + ' instead of inheriting .chip');
+  }
+  assert.ok(/appearance:\s*none/.test(sel), 'the native select chrome is stripped');
+});
