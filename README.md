@@ -49,7 +49,7 @@ Three routes. All three end at the same place.
 
 **Copy a spreadsheet that already has it.** Once one sheet has the add-on, the bound script travels with any copy of it. Open the copy, **Claude ▸ Open sidebar**, authorize once, and it works — nothing to install. Quickest way to a second sheet, and what a template sheet is for.
 
-**With clasp.** `cd addon && clasp push`. Worth the setup only if you intend to track this repo — [`addon/README.md`](addon/README.md) is the walkthrough, including the account-level Apps Script API switch that makes every first push fail.
+**With clasp.** `cd addon && clasp push`. Worth the setup only if you intend to track this repo — **Installing the add-on with clasp** below is the walkthrough, including the account-level Apps Script API switch that makes every first push fail.
 
 The first turn in a new spreadsheet waits for you to approve it on the dashboard. That approval happens there and not in the sidebar on purpose: a web page must not be able to grant itself access.
 
@@ -98,11 +98,175 @@ npm run bundle    # regenerate addon/dist/Claude.gs
 No browser, no Google account, and no Claude invocation are involved — the add-on half runs against a fake `SpreadsheetApp`, the daemon half against recorded CLI output.
 
 ```
-addon/       Apps Script — sidebar, sheet I/O, history
-daemon/      Local app — credential, loopback API, dashboard
-shared/      Op protocol — the contract both halves depend on
-experiments/ Platform probes; re-run before releases
+addon/           Apps Script — sidebar, sheet I/O, history
+  Code.gs        Menu, sidebar host, the google.script.run entry points
+  Sheet.gs       Reading — context, ranges, the mid-turn guard's hash
+  Ops.gs         Every write, and the inverse recorded for each one
+  History.gs     Snapshots and the hidden __claude_history__ sheet
+  Sidebar.html   The whole UI — markup, style, turn loop
+  dist/          Generated: the four .gs files concatenated, for pasting
+
+daemon/          Local app — credential, loopback API, dashboard
+  src/index.js       HTTPS server, routes, pairing, tool-call relay
+  src/claude.js      CLI resolution, spawn, stream-json parsing
+  src/mcp-bridge.js  stdio MCP server the CLI spawns; forwards calls back
+  src/store.js       Paired list, activity index, settings
+  src/web-gate.js    PreToolUse hook gating web search and fetch
+  src/autostart.js   Start at login
+  src/dashboard/     The dashboard page
+
+shared/          Op protocol — the contract both halves depend on
+experiments/     Platform probes; re-run before releases
 ```
+
+Apps Script shares one global scope across every file in a project, which is why `dist/Claude.gs` exists and why the paste install is two files rather than five.
+
+---
+
+## Under the hood
+
+Everything below is reference. You can install and use this without reading any of it. The design rationale lives in [`ARCHITECTURE.md`](ARCHITECTURE.md); this is the operating detail.
+
+<details>
+<summary><b>The local app's HTTP API</b></summary>
+
+<br>
+
+| Route | Purpose |
+|---|---|
+| `GET /` | The dashboard. Carries the dashboard token, and deliberately sends no CORS headers so no other page can read it |
+| `GET /ping` | Health — `{ok, version, credentialReady}`. The sidebar's status dot |
+| `GET /status` | Everything the dashboard renders. **Token-guarded** |
+| `POST /turn` | The turn. SSE stream out; body `{spreadsheetId, spreadsheetName, prompt, context}` |
+| `POST /prefs` | The sidebar's door. `{spreadsheetId}` reads model, askBefore, webAccess and the model list; adding `model` sets it. Gated on the sheet being paired, and it accepts no other key |
+| `POST /pair` | `{spreadsheetId, allow}` — settles a pending request. Token-guarded |
+| `POST /reset` | `{spreadsheetId}` — ends the conversation, keeps the pairing |
+| `POST /unpair` | `{spreadsheetId}` — revokes |
+| `POST /settings` | Global settings. Token-guarded |
+| `POST /bridge/call` | MCP bridge only — relays a tool call to the sidebar |
+| `POST /op-result` | The sidebar answering one; the unguessable `callId` is the credential |
+| `POST /gate` | Web-gate hook only — relays a web request to the sidebar |
+| `POST /gate-result` | The sidebar answering one. No answer means deny |
+
+The `/turn` stream:
+
+```
+{type:'pairing_required', spreadsheetName}   waiting on the dashboard
+{type:'paired'}                              approved, proceeding
+{type:'settings', askBefore, webAccess}      this turn's rules
+{type:'session', model, sessionId, resumed}  Claude started
+{type:'tool_call', callId, name, args}       execute this, POST /op-result
+{type:'gate', gateId, tool, detail}          ask the human, POST /gate-result
+{type:'text', delta}                         incremental output
+{type:'done', costUsd, usage}                turn complete
+{type:'error', code, message}                AUTH_FAILED · CLI_NOT_FOUND · …
+```
+
+Timeouts nest on purpose: a tool call waits 5 minutes, a web gate 4, and the hook's own limit sits inside the CLI's — a killed hook emits no decision, and no decision means the tool runs.
+
+</details>
+
+<details>
+<summary><b>Why pairing is the auth boundary</b></summary>
+
+<br>
+
+It has to be. CORS cannot be one: the sidebar's origin is `n-<rotating-hash>-script.googleusercontent.com`, the hash is not stable, so no allowlist is possible and `*` is the only workable answer. **Any page can reach this app.**
+
+So a first request from an unrecognized spreadsheet is *held* while the dashboard prompts, and approval is by spreadsheet ID, confirmed out-of-band in a UI the web cannot drive. A hostile page can knock; it cannot let itself in. Unapproved requests time out after three minutes.
+
+This is also why the sidebar cannot change the confirmation gate or web access. It is a web page, so anything that could steal its credentials could switch your protections off. It gets `POST /prefs`, which accepts a model and nothing else.
+
+</details>
+
+<details>
+<summary><b>Isolation — a spreadsheet editor, not a coding agent</b></summary>
+
+<br>
+
+Every invocation strips what the CLI would otherwise inherit: `--system-prompt` replaces the coding prompt, `--strict-mcp-config` drops your MCP servers, `--tools ""` removes every built-in tool, and cwd is a neutral `~/.claude-sheets/workspace` so no `CLAUDE.md` is discovered by tree walk.
+
+Claude's only tools are ours, granted with `--allowedTools "mcp__sheets"` and served by `mcp-bridge.js`. Every call is executed by the **sidebar** through Apps Script, behind the confirmation gate — the local app cannot touch a spreadsheet, it can only ask. So a prompt injection hidden in a cell cannot reach your filesystem, and its worst case is one spreadsheet, which the edit history covers.
+
+**`--tools ""`, and never a denylist.** This was `--disallowedTools` naming ten tools, and a live `init` line showed eighteen others still reachable, including `CronCreate` and `Workflow`. A denylist excludes only what existed when it was written. `daemon/test/isolation.test.js` fails if anyone reintroduces one.
+
+**Hooks are the exception.** They fire regardless of cwd and regardless of `--settings '{"hooks":{}}'` — that flag merges rather than replaces. `--bare` would stop them but never reads OAuth, which breaks subscription auth. Their output is filtered so it never reaches the sidebar, but the latency stays.
+
+</details>
+
+<details>
+<summary><b>One conversation per spreadsheet, and what it costs</b></summary>
+
+<br>
+
+A turn continues the previous turn for the same spreadsheet. The session ID is minted by the local app, stored per spreadsheet, and passed as `--session-id` on the first turn and `--resume` after. **New chat** ends it.
+
+A stored session that has been deleted is not an error you see: the resume is held silent until the CLI confirms the session opened, and if it never does, a fresh one starts and the turn proceeds normally.
+
+Every turn pays roughly 25,000 tokens of CLI baseline whatever the model, which is why the model matters more than message length. Measured on an identical trivial prompt, fresh session:
+
+| Model | Cost |
+|---|---|
+| Fable 5 | $0.4987 |
+| Sonnet 5 | $0.1498 |
+
+Resuming is where the saving is, because that baseline becomes a cache read instead of a cache write. Two turns of one Sonnet 5 session:
+
+| | Cost | `cache_creation` | `cache_read` |
+|---|---|---|---|
+| First turn | $0.0449 | 6,545 | 18,660 |
+| Resumed | $0.0081 | 88 | 25,205 |
+
+The longer a conversation runs the more of it is cached, so **New chat** costs more than the turn before it. That is the trade for having the context.
+
+</details>
+
+<details>
+<summary><b>Installing the add-on with clasp</b></summary>
+
+<br>
+
+Google's CLI is [`@google/clasp`](https://github.com/google/clasp); this was written against **3.4.0**.
+
+**1.** `npm install -g @google/clasp && clasp login`
+
+**2. Turn on the Apps Script API for your account** — https://script.google.com/home/usersettings, switch **Google Apps Script API** to On. This is the step everyone misses. It is off by default, and without it every push fails with an error about the Apps Script API that reads like a spreadsheet permissions problem.
+
+**3.** In your spreadsheet, **Extensions ▸ Apps Script** — opening the editor is what *creates* the bound project — then **⚙ Project Settings ▸ Script ID**, and copy it.
+
+**4.** `cp addon/.clasp.json.example addon/.clasp.json` and paste the ID in. That file is gitignored because it names *your* spreadsheet's project.
+
+**5.** `cd addon && clasp push`
+
+The first push asks whether to overwrite the remote manifest. **Say yes** — `appsscript.json` is what enables the Sheets advanced service, and declining leaves borders and conditional formatting with an undo that has nothing to restore. `--force` answers yes without asking, and is required anywhere stdin is not a terminal: a scripted push takes the default, which is to *skip* the manifest.
+
+**`.claspignore` must stay.** `clasp push` uploads everything under `rootDir`, and `addon/` holds a Node test suite — Apps Script would pull its helpers, including a fake `SpreadsheetApp`, into the same global namespace the real files share, and the add-on breaks on load with no obvious cause. `clasp status` lists exactly what a push would send: seven files.
+
+</details>
+
+<details>
+<summary><b>Where things are stored</b></summary>
+
+<br>
+
+`~/.claude-sheets/state.json` — paired spreadsheets, the activity index (newest first, capped at 500), settings, and per-spreadsheet instructions. Deliberately not in Claude Code's projects or auto-memory: sheet preferences help, coding-project context does not.
+
+Snapshot payloads are deliberately **not** there. They live in a hidden sheet inside your own spreadsheet, so restore works with the local app closed, and travels with the file when you share it.
+
+The certificate is generated, never shared — `*.pem` is gitignored. `npm run certs` remakes it; it refuses to overwrite an existing one without `--force`.
+
+</details>
+
+<details>
+<summary><b>Two things that must not be changed back</b></summary>
+
+<br>
+
+**The CLI is resolved to an absolute path and spawned with `shell: false`.** The argument list carries the prompt, which embeds spreadsheet cell content you did not write. Passing that through a shell is a command-injection vector.
+
+**`--bare` is not used**, despite suppressing hook noise on every invocation. Its own help states "OAuth and keychain are never read", which breaks subscription auth. Hook and init lines are filtered in `claude.js` instead.
+
+</details>
 
 ## License
 

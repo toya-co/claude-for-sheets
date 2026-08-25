@@ -258,7 +258,7 @@ const setupDocs = () => `
   <h3>With clasp</h3>
   <p><code>cd addon &amp;&amp; clasp push</code>, once clasp is signed in and
   pointed at this spreadsheet's script. Worth the setup only to track the repo.
-  Full walkthrough in <code>addon/README.md</code> &mdash; including the
+  Full walkthrough in the repo README &mdash; including the
   account-level <strong>Apps Script API</strong> switch that is off by default
   and makes every first push fail.</p>
 
