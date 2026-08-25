@@ -37,17 +37,17 @@ That page is the dashboard. Leave it open or don't; the app runs either way.
 
 ### 2. The add-on
 
-Three routes, easiest first. All three end at the same place.
+Three routes. All three end at the same place.
 
-**Copy a spreadsheet that already has it.** The bound script travels with the copy. Open the copy, **Claude ▸ Open sidebar**, authorize once, and it works — nothing to install. This is what a template sheet is for.
-
-**Paste two files.** For a spreadsheet you already have and care about.
+**Paste two files.** Start here. No tooling, five minutes.
 
 1. **Extensions ▸ Apps Script**
 2. Paste [`addon/dist/Claude.gs`](addon/dist/Claude.gs) over the default `Code.gs`
 3. Add an HTML file named exactly `Sidebar` and paste [`addon/Sidebar.html`](addon/Sidebar.html) into it
 4. **Services ▸ +** and add **Google Sheets API**
 5. Save, reload the spreadsheet tab, then **Claude ▸ Open sidebar** and authorize
+
+**Copy a spreadsheet that already has it.** Once one sheet has the add-on, the bound script travels with any copy of it. Open the copy, **Claude ▸ Open sidebar**, authorize once, and it works — nothing to install. Quickest way to a second sheet, and what a template sheet is for.
 
 **With clasp.** `cd addon && clasp push`. Worth the setup only if you intend to track this repo — [`addon/README.md`](addon/README.md) is the walkthrough, including the account-level Apps Script API switch that makes every first push fail.
 
