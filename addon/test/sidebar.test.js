@@ -508,6 +508,11 @@ test('a turn is never sent without a spreadsheet, and a refusal is shown', () =>
     'it refuses to send a turn with no spreadsheet');
   assert.ok(body.indexOf('if (!ctx || !ctx.spreadsheetId)') < body.indexOf('fetch(DAEMON'),
     'and refuses BEFORE the fetch, not after');
+  // It writes to `bubble`, so it must sit AFTER the const that declares it.
+  // Placed above, it threw a TDZ ReferenceError before the try block — no
+  // catch, no bubble, and the message explaining the failure never appeared.
+  assert.ok(body.indexOf('const bubble =') < body.indexOf('if (!ctx || !ctx.spreadsheetId)'),
+    'the guard runs after bubble is declared, not in its temporal dead zone');
 
   // The Apps Script error has to survive the failure handler to be shown.
   assert.ok(/ctxError = /.test(code), 'the failure handler keeps the message');

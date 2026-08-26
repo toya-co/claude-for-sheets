@@ -1024,23 +1024,29 @@
 
         await refreshContext();
 
-        // Never send a turn we already know is invalid. Without a spreadsheet
-        // id the daemon answers 400 and the turn dies looking like the model
-        // failed, when the add-on half is what is broken — and the add-on half
-        // is the one the user can actually fix.
+        const node = addMsg('claude', '<b>Claude</b><div class="bubble"></div>');
+        const bubble = node.querySelector('.bubble');
+        bubble.innerHTML = '<span class="thinking"><i></i><i></i><i></i></span>';
+
+        // Never send a turn we already know is invalid: without a spreadsheet id
+        // the daemon answers 400 and it reads as the model failing, when the
+        // add-on half is what is broken — and that is the half a user can fix.
+        //
+        // This sits AFTER the bubble exists, deliberately. It was above, which
+        // put `bubble` in its temporal dead zone: the guard threw a
+        // ReferenceError before the try block, so nothing was caught and no
+        // Claude bubble was ever created. The failure it was written to explain
+        // became a message that never appeared at all.
         if (!ctx || !ctx.spreadsheetId) {
           bubble.innerHTML = '<span style="color:var(--bad)"><b>Could not read this spreadsheet.</b><br>' +
             (ctxError ? esc(ctxError) + '<br>' : '') +
-            'The sidebar is running but Apps Script did not return the sheet. ' +
-            'Re-open the sidebar from the Claude menu and authorize if asked; ' +
-            'if it persists, re-paste the add-on files into this spreadsheet.</span>';
+            'Apps Script did not return the sheet. Re-open the sidebar from the ' +
+            'Claude menu and authorize if asked; if it persists, re-paste the ' +
+            'add-on files into this spreadsheet.</span>';
           turnAbort = null;
           setSending(false);
           return;
         }
-        const node = addMsg('claude', '<b>Claude</b><div class="bubble"></div>');
-        const bubble = node.querySelector('.bubble');
-        bubble.innerHTML = '<span class="thinking"><i></i><i></i><i></i></span>';
         let acc = '';
         let sawDone = false;
         let sawError = false;
