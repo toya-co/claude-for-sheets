@@ -958,11 +958,26 @@
       }
 
       // ---- context ----------------------------------------------------------
+      /**
+       * Why the Apps Script error is kept rather than swallowed.
+       *
+       * This used to resolve(null) on failure and discard the message. A turn
+       * would then POST spreadsheetId:null, the daemon would answer 400
+       * "spreadsheetId and prompt are required", and the sidebar would read a
+       * JSON error as an empty event stream — so a broken add-on half surfaced
+       * as a turn that silently did nothing. The real cause was a sentence Apps
+       * Script had already written and nobody kept.
+       */
+      let ctxError = null;
+
       function refreshContext() {
         return new Promise((resolve) => {
           google.script.run
-            .withSuccessHandler((c) => { ctx = c; rememberRead(c); resolve(c); })
-            .withFailureHandler(() => resolve(null))
+            .withSuccessHandler((c) => { ctxError = null; ctx = c; rememberRead(c); resolve(c); })
+            .withFailureHandler((e) => {
+              ctxError = (e && (e.message || e)) || 'unknown error';
+              resolve(null);
+            })
             .getContext({});
         });
       }
@@ -1008,6 +1023,21 @@
         addMsg('user', '<b>You</b><div class="bubble">' + esc(text) + '</div>');
 
         await refreshContext();
+
+        // Never send a turn we already know is invalid. Without a spreadsheet
+        // id the daemon answers 400 and the turn dies looking like the model
+        // failed, when the add-on half is what is broken — and the add-on half
+        // is the one the user can actually fix.
+        if (!ctx || !ctx.spreadsheetId) {
+          bubble.innerHTML = '<span style="color:var(--bad)"><b>Could not read this spreadsheet.</b><br>' +
+            (ctxError ? esc(ctxError) + '<br>' : '') +
+            'The sidebar is running but Apps Script did not return the sheet. ' +
+            'Re-open the sidebar from the Claude menu and authorize if asked; ' +
+            'if it persists, re-paste the add-on files into this spreadsheet.</span>';
+          turnAbort = null;
+          setSending(false);
+          return;
+        }
         const node = addMsg('claude', '<b>Claude</b><div class="bubble"></div>');
         const bubble = node.querySelector('.bubble');
         bubble.innerHTML = '<span class="thinking"><i></i><i></i><i></i></span>';
@@ -1027,6 +1057,17 @@
               context: ctx,
             }),
           });
+
+          // The daemon answers errors as JSON, not as an event stream. Reading
+          // one as a stream finds no frames and looks identical to a turn that
+          // produced nothing — so check first and show what it actually said.
+          if (!res.ok || !/text\/event-stream/.test(res.headers.get('content-type') || '')) {
+            let said = '';
+            try { said = (await res.json()).error || ''; } catch { /* not json */ }
+            bubble.innerHTML = '<span style="color:var(--bad)"><b>The local app refused the turn' +
+              ' (' + res.status + ')</b>' + (said ? '<br>' + esc(said) : '') + '</span>';
+            return;
+          }
 
           const reader = res.body.getReader();
           const dec = new TextDecoder();

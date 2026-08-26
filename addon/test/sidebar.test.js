@@ -494,3 +494,28 @@ test('the turn always ends in something visible, never in spinning dots', () => 
   assert.ok(body.indexOf('if (!acc && !sawError)') < body.indexOf('} catch (e)'),
     'the check runs before the catch, so a normal end is covered too');
 });
+
+test('a turn is never sent without a spreadsheet, and a refusal is shown', () => {
+  // The bug: getContext() failing resolved to null and threw the message away,
+  // so the sidebar POSTed spreadsheetId:null, the daemon answered 400, and the
+  // sidebar read that JSON as an empty event stream. A broken add-on half
+  // surfaced as a turn that silently did nothing — while Apps Script had
+  // already written the explanation and nobody kept it.
+  const send = code.slice(code.indexOf('async function send()'));
+  const body = send.slice(0, send.indexOf('\n      function '));
+
+  assert.ok(/if \(!ctx \|\| !ctx\.spreadsheetId\)/.test(body),
+    'it refuses to send a turn with no spreadsheet');
+  assert.ok(body.indexOf('if (!ctx || !ctx.spreadsheetId)') < body.indexOf('fetch(DAEMON'),
+    'and refuses BEFORE the fetch, not after');
+
+  // The Apps Script error has to survive the failure handler to be shown.
+  assert.ok(/ctxError = /.test(code), 'the failure handler keeps the message');
+  assert.ok(/withFailureHandler\(\(e\)/.test(code), 'and receives it in the first place');
+  assert.ok(body.includes('ctxError'), 'and the turn surfaces it');
+
+  // A non-stream response must be read as an error, not as an empty stream.
+  assert.ok(body.includes('event-stream'),
+    'the content type is checked before reading frames');
+  assert.ok(/res\.ok/.test(body), 'and so is the status');
+});
