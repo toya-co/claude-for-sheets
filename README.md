@@ -49,6 +49,8 @@ Three routes. All three end at the same place.
 
 **Copy a spreadsheet that already has it.** Once one sheet has the add-on, the bound script travels with any copy of it. Open the copy, **Claude ▸ Open sidebar**, authorize once, and it works — nothing to install. Quickest way to a second sheet, and what a template sheet is for.
 
+**Or hand it to an agent.** If you have Claude Code, Cursor, or anything that can run commands on your machine, [`INSTALL-WITH-AN-AGENT.md`](INSTALL-WITH-AN-AGENT.md) is four prompts to paste one at a time — it does the clone, the local app, and the paste checklist, and stops at the two steps only you can do.
+
 **With clasp.** `cd addon && clasp push`. Worth the setup only if you intend to track this repo — **Installing the add-on with clasp** below is the walkthrough, including the account-level Apps Script API switch that makes every first push fail.
 
 The first turn in a new spreadsheet waits for you to approve it on the dashboard. That approval happens there and not in the sidebar on purpose: a web page must not be able to grant itself access.
