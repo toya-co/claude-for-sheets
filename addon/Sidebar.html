@@ -1012,6 +1012,8 @@
         const bubble = node.querySelector('.bubble');
         bubble.innerHTML = '<span class="thinking"><i></i><i></i><i></i></span>';
         let acc = '';
+        let sawDone = false;
+        let sawError = false;
 
         try {
           const res = await fetch(DAEMON + '/turn', {
@@ -1062,10 +1064,33 @@
               } else if (ev.type === 'text') {
                 acc += ev.delta;
                 bubble.textContent = acc;   // also clears the thinking dots
+              } else if (ev.type === 'done') {
+                sawDone = true;
               } else if (ev.type === 'error') {
+                sawError = true;
                 bubble.innerHTML = '<span style="color:var(--bad)"><b>' +
                   esc(ev.code) + '</b><br>' + esc(ev.message) + '</span>';
               }
+            }
+          }
+
+          // The stream is over. Something must replace the thinking dots, or
+          // they spin forever against a composer that has already gone back to
+          // Send — which reads as "still working" while nothing is.
+          //
+          // Only `text` and `error` wrote to the bubble above. A turn that
+          // finishes having only made tool calls writes neither, and neither
+          // does a stream that closes early, so both used to strand it.
+          if (!acc && !sawError) {
+            const did = node.querySelectorAll('.op').length;
+            if (did) {
+              bubble.innerHTML = '';           // the op cards are the answer
+            } else if (sawDone) {
+              bubble.innerHTML = '<i>Finished without a reply.</i>';
+            } else {
+              bubble.innerHTML = '<i>The turn ended before it finished. ' +
+                'Nothing was left running — send it again, or check the local ' +
+                'app at <span class="a1">' + DAEMON + '</span>.</i>';
             }
           }
 

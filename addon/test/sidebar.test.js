@@ -467,3 +467,30 @@ test('the two composer chips are one style, not two that match today', () => {
   }
   assert.ok(/appearance:\s*none/.test(sel), 'the native select chrome is stripped');
 });
+
+test('the turn always ends in something visible, never in spinning dots', () => {
+  // The failure this pins: `text` and `error` were the only events that wrote
+  // to the bubble, so a turn that only made tool calls, or a stream that closed
+  // early, left the thinking dots spinning forever against a composer that had
+  // already gone back to Send. Dots plus a live Send button is a contradiction
+  // — a running turn shows Stop — and it reads as "still working" while nothing
+  // is. The op executor has answered on every terminal branch since M9; the
+  // turn renderer did not.
+  const fn = code.slice(code.indexOf('async function send()'));
+  const body = fn.slice(0, fn.indexOf('\n      function '));
+
+  assert.ok(/if \(!acc && !sawError\)/.test(body),
+    'the stream end checks whether anything was rendered');
+  assert.ok(/sawDone/.test(body), 'a completed turn is distinguished from a truncated one');
+
+  // Every branch of that decision must write to the bubble.
+  const tail = body.slice(body.indexOf('if (!acc && !sawError)'));
+  const decided = tail.slice(0, tail.indexOf('} catch (e)'));
+  const writes = (decided.match(/bubble\.innerHTML =/g) || []).length;
+  assert.ok(writes >= 3,
+    'each end-state writes something: ops-only, finished-silent, truncated — got ' + writes);
+
+  // And the dots must not be able to survive the finally.
+  assert.ok(body.indexOf('if (!acc && !sawError)') < body.indexOf('} catch (e)'),
+    'the check runs before the catch, so a normal end is covered too');
+});
