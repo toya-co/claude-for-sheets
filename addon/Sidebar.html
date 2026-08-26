@@ -266,6 +266,21 @@
         appearance:none; -webkit-appearance:none;
         padding-right:21px; max-width:112px; text-overflow:ellipsis;
       }
+      /*
+       * The popup list is the one piece a native select still draws itself —
+       * `appearance:none` strips the closed control and leaves the open menu
+       * alone, so it came out as a white slab hanging under a dark panel.
+       *
+       * Chrome honours background and color on `option`, and the sidebar only
+       * ever runs in Chrome, so the menu can sit on the palette like everything
+       * else. The highlight on the focused row stays the OS accent: that one is
+       * drawn by the platform and is not ours to set. It should not be —
+       * matching it would mean guessing a colour the user chose.
+       */
+      select.chip option {
+        background:var(--paper);
+        color:var(--fg);
+      }
       .chipsel { position:relative; display:inline-flex; flex:none; }
       .chipsel::after {
         content:''; position:absolute; right:8px; top:50%; margin-top:-1px;
